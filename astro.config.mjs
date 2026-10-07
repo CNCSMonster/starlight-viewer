@@ -100,6 +100,9 @@ function getDynamicSidebar() {
 
 // https://astro.build/config
 export default defineConfig({
+  redirects: {
+    '/': '/readme',
+  },
   vite: {
     plugins: [oramaSearchPlugin()],
   },
