@@ -3,10 +3,87 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 import path from 'node:path';
 import fs from 'node:fs';
+import zlib from 'node:zlib';
 import { OramaSearchManager } from './src/search-engine.js';
 
 const docsDir = path.resolve(process.cwd(), 'src/content/docs');
 const searchManager = new OramaSearchManager(docsDir);
+
+function compressionPlugin() {
+  return {
+    name: 'starlight-compression-plugin',
+    configureServer(server) {
+      server.middlewares.use((req, res, next) => {
+        const acceptEncoding = req.headers['accept-encoding'] || '';
+        if (!acceptEncoding.includes('gzip')) {
+          return next();
+        }
+
+        const rawWriteHead = res.writeHead;
+        const rawWrite = res.write;
+        const rawEnd = res.end;
+        let chunks = [];
+        let statusCode = 200;
+        let statusMessage;
+
+        res.writeHead = function (code, reason, headers) {
+          statusCode = code;
+          if (typeof reason === 'string') {
+            statusMessage = reason;
+          } else if (headers === undefined && typeof reason === 'object') {
+            headers = reason;
+          }
+          if (headers) {
+            for (const [k, v] of Object.entries(headers)) {
+              res.setHeader(k, v);
+            }
+          }
+          return res;
+        };
+
+        res.write = function (chunk, encoding, callback) {
+          if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
+          if (typeof encoding === 'function') encoding();
+          if (typeof callback === 'function') callback();
+          return true;
+        };
+
+        res.end = function (chunk, encoding, callback) {
+          if (chunk) chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk, encoding));
+          if (typeof encoding === 'function') callback = encoding;
+
+          const buffer = Buffer.concat(chunks);
+          const contentType = String(res.getHeader('content-type') || '');
+          const isCompressible = /text|javascript|json|xml|svg|html/i.test(contentType);
+
+          // 还原原生函数
+          res.writeHead = rawWriteHead;
+          res.write = rawWrite;
+          res.end = rawEnd;
+
+          if (buffer.length < 1024 || !isCompressible || res.getHeader('content-encoding')) {
+            if (statusCode) rawWriteHead.call(res, statusCode, statusMessage);
+            return rawEnd.call(res, buffer, callback);
+          }
+
+          zlib.gzip(buffer, { level: 6 }, (err, compressed) => {
+            if (err) {
+              if (statusCode) rawWriteHead.call(res, statusCode, statusMessage);
+              return rawEnd.call(res, buffer, callback);
+            }
+            res.setHeader('Content-Encoding', 'gzip');
+            res.removeHeader('Content-Length');
+            res.setHeader('Content-Length', compressed.length);
+            if (statusCode) rawWriteHead.call(res, statusCode, statusMessage);
+            rawEnd.call(res, compressed, callback);
+          });
+        };
+
+        next();
+      });
+    },
+  };
+}
 
 function oramaSearchPlugin() {
   return {
@@ -14,9 +91,33 @@ function oramaSearchPlugin() {
     configureServer(server) {
       searchManager.init();
 
+      let reloadTimer = null;
+      let isReloading = false;
+      const configFile = path.resolve(process.cwd(), 'astro.config.mjs');
+
+      const triggerSidebarReload = () => {
+        if (isReloading) return;
+        if (reloadTimer) clearTimeout(reloadTimer);
+        reloadTimer = setTimeout(() => {
+          isReloading = true;
+          try {
+            const now = new Date();
+            fs.utimesSync(configFile, now, now);
+            console.log('🔄 [Starlight] 检测到笔记增删/移动，已平滑重载侧边栏配置');
+          } catch (e) {
+            console.error('⚠️ [Starlight] 重载侧边栏触碰配置失败:', e);
+          } finally {
+            setTimeout(() => {
+              isReloading = false;
+            }, 3000);
+          }
+        }, 1500);
+      };
+
       server.watcher.on('add', (filePath) => {
         if (filePath.endsWith('.md')) {
           searchManager.upsertFile(filePath);
+          triggerSidebarReload();
         }
       });
 
@@ -29,6 +130,7 @@ function oramaSearchPlugin() {
       server.watcher.on('unlink', (filePath) => {
         if (filePath.endsWith('.md')) {
           searchManager.removeFile(filePath);
+          triggerSidebarReload();
         }
       });
 
@@ -50,13 +152,11 @@ function oramaSearchPlugin() {
 
 const siteTitle = process.env.SITE_TITLE || 'Knowledge Base (Starlight Viewer)';
 
-// 动态侧边栏映射与隐私目录过滤
 const envExcludes = (process.env.EXCLUDE_DIRS || 'Private')
   .split(',')
   .map(s => s.trim().toLowerCase())
   .filter(Boolean);
 
-// 自动探测 docs 目录下的顶级目录，建立侧边栏
 function getDynamicSidebar() {
   const sidebar = [
     {
@@ -84,7 +184,7 @@ function getDynamicSidebar() {
   for (const entry of entries) {
     if (entry.isDirectory() && !entry.name.startsWith('.')) {
       if (envExcludes.includes(entry.name.toLowerCase())) {
-        continue; // 隐私目录直接过滤，不进入侧边栏
+        continue;
       }
       const label = labelsMap[entry.name] || `📁 ${entry.name}`;
       sidebar.push({
@@ -104,11 +204,12 @@ export default defineConfig({
     '/': '/readme',
   },
   vite: {
-    plugins: [oramaSearchPlugin()],
+    plugins: [compressionPlugin(), oramaSearchPlugin()],
   },
   integrations: [
     starlight({
       title: siteTitle,
+      customCss: ['./src/styles/custom.css'],
       components: {
         Search: './src/components/Search.astro',
       },
