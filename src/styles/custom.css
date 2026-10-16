@@ -4,3 +4,11 @@
 .sl-markdown-content > h1:first-child {
   display: none !important;
 }
+
+/* 代码块通用展示约束：限宽于正文列，超出部分隐于右侧，横向滚动查看；
+   不折行保持命令/示意图原貌。滚动条本身即引导作者写窄行，内容层零限制 */
+.sl-markdown-content pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
+}
