@@ -13,3 +13,8 @@ src/content/docs/
 .env.*
 .DS_Store
 Thumbs.db
+
+# 代码索引工具产物（codanna / fastembed 缓存）
+.codanna/
+.codannaignore
+.fastembed_cache/
