@@ -7,7 +7,10 @@ import zlib from 'node:zlib';
 import { OramaSearchManager } from './src/search-engine.js';
 
 const docsDir = path.resolve(process.cwd(), 'src/content/docs');
-const searchManager = new OramaSearchManager(docsDir);
+const searchManager = new OramaSearchManager(
+  docsDir,
+  path.resolve(process.cwd(), '.orama-index.json'),
+);
 
 function compressionPlugin() {
   return {
@@ -92,44 +95,107 @@ function oramaSearchPlugin() {
       searchManager.init();
 
       let reloadTimer = null;
-      let isReloading = false;
       const configFile = path.resolve(process.cwd(), 'astro.config.mjs');
 
+      const invalidateStarlightSidebar = () => {
+        try {
+          const graphs = [
+            server.moduleGraph,
+            server.environments?.ssr?.moduleGraph,
+            server.environments?.client?.moduleGraph,
+          ].filter(Boolean);
+
+          let invalidatedCount = 0;
+          for (const graph of graphs) {
+            if (!graph.idToModuleMap) continue;
+            for (const [id, mod] of graph.idToModuleMap.entries()) {
+              if (!id) continue;
+              if (
+                id.includes('@astrojs/starlight') ||
+                id.includes('virtual:starlight') ||
+                id.includes('astro:content')
+              ) {
+                graph.invalidateModule(mod);
+                invalidatedCount++;
+              }
+            }
+          }
+          server.ws.send({ type: 'full-reload' });
+          console.log(`⚡ [Starlight] 内存快速刷新侧边栏与路由 (使 ${invalidatedCount} 个模块失效，零重启)`);
+        } catch (e) {
+          console.error('⚠️ [Starlight] 内存刷新侧边栏失败:', e);
+        }
+      };
+
+      // 仅索引内容目录（软链前 + realpath 后）下的 .md，防仓库根 README 等杂物入索引
+      const docsReal = (() => { try { return fs.realpathSync(docsDir); } catch { return docsDir; } })();
+      const isDocsFile = (p) => {
+        const n = path.resolve(p);
+        return n.endsWith('.md') && (
+          n === docsDir || n.startsWith(docsDir + path.sep) ||
+          n === docsReal || n.startsWith(docsReal + path.sep)
+        );
+      };
+
       const triggerSidebarReload = () => {
-        if (isReloading) return;
         if (reloadTimer) clearTimeout(reloadTimer);
         reloadTimer = setTimeout(() => {
-          isReloading = true;
-          try {
-            const now = new Date();
-            fs.utimesSync(configFile, now, now);
-            console.log('🔄 [Starlight] 检测到笔记增删/移动，已平滑重载侧边栏配置');
-          } catch (e) {
-            console.error('⚠️ [Starlight] 重载侧边栏触碰配置失败:', e);
-          } finally {
-            setTimeout(() => {
-              isReloading = false;
-            }, 3000);
-          }
-        }, 1500);
+          invalidateStarlightSidebar();
+        }, 300);
+      };
+
+      let dirReloadTimer = null;
+      server.watcher.on('addDir', (dirPath) => {
+        const parent = path.dirname(dirPath);
+        if (parent === docsDir) {
+          console.log('📁 [Starlight] 检测到顶级分类目录变动：先内存刷新，再防抖重载配置');
+          triggerSidebarReload();
+          if (dirReloadTimer) clearTimeout(dirReloadTimer);
+          dirReloadTimer = setTimeout(() => {
+            try {
+              const now = new Date();
+              fs.utimesSync(configFile, now, now);
+            } catch {}
+          }, 1200);
+        }
+      });
+
+      // 批量同步笔记时 watcher 事件风暴防抖：200ms 静默窗口合并 upsert/remove
+      let pendingSearchOps = new Map();
+      let searchFlushTimer = null;
+      const flushSearchOps = () => {
+        if (pendingSearchOps.size === 0) return;
+        const ops = [...pendingSearchOps.values()];
+        pendingSearchOps.clear();
+        for (const { filePath, op } of ops) {
+          if (op === 'remove') searchManager.removeFile(filePath);
+          else searchManager.upsertFile(filePath);
+        }
+      };
+      const scheduleSearchFlush = () => {
+        if (searchFlushTimer) clearTimeout(searchFlushTimer);
+        searchFlushTimer = setTimeout(flushSearchOps, 200);
       };
 
       server.watcher.on('add', (filePath) => {
-        if (filePath.endsWith('.md')) {
-          searchManager.upsertFile(filePath);
+        if (isDocsFile(filePath)) {
+          pendingSearchOps.set(filePath, { filePath, op: 'upsert' });
+          scheduleSearchFlush();
           triggerSidebarReload();
         }
       });
 
       server.watcher.on('change', (filePath) => {
-        if (filePath.endsWith('.md')) {
-          searchManager.upsertFile(filePath);
+        if (isDocsFile(filePath)) {
+          pendingSearchOps.set(filePath, { filePath, op: 'upsert' });
+          scheduleSearchFlush();
         }
       });
 
       server.watcher.on('unlink', (filePath) => {
-        if (filePath.endsWith('.md')) {
-          searchManager.removeFile(filePath);
+        if (isDocsFile(filePath)) {
+          pendingSearchOps.set(filePath, { filePath, op: 'remove' });
+          scheduleSearchFlush();
           triggerSidebarReload();
         }
       });
@@ -180,19 +246,48 @@ function getDynamicSidebar() {
     Other: '🗂️ 综合杂项 (Other)',
   };
 
+  // 空目录（如历史遗留的百分号编码目录骨架）不进侧边栏
+  const hasMarkdown = (dir) => {
+    for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (e.isDirectory()) {
+        if (hasMarkdown(path.join(dir, e.name))) return true;
+      } else if (e.name.endsWith('.md')) {
+        return true;
+      }
+    }
+    return false;
+  };
+
   const entries = fs.readdirSync(docsDir, { withFileTypes: true });
   for (const entry of entries) {
     if (entry.isDirectory() && !entry.name.startsWith('.')) {
       if (envExcludes.includes(entry.name.toLowerCase())) {
         continue;
       }
+      if (!hasMarkdown(path.join(docsDir, entry.name))) {
+        continue;
+      }
       const label = labelsMap[entry.name] || `📁 ${entry.name}`;
       sidebar.push({
         label,
         collapsed: entry.name !== 'WIP',
-        items: [{ autogenerate: { directory: entry.name } }],
+        // collapsed: true → 子组默认折叠；当前页所在链路由 Starlight 自动展开（sidebarGroupHasCurrent）
+        items: [{ autogenerate: { directory: entry.name, collapsed: true } }],
       });
     }
+  }
+
+  // 本地预览区：仅当 public/preview 存在时显示，避免把预览产物写进内容库
+  const previewDir = path.join(process.cwd(), 'public', 'preview', 'multica-sandbox');
+  if (fs.existsSync(previewDir)) {
+    sidebar.push({
+      label: '🖼️ 本地预览',
+      collapsed: true,
+      items: [
+        { label: 'Multica 沙箱 · 单实例架构', link: '/sbx-preview/single' },
+        { label: 'Multica 沙箱 · 多实例拓扑', link: '/sbx-preview/multi' },
+      ],
+    });
   }
 
   return sidebar;
@@ -210,6 +305,26 @@ export default defineConfig({
     starlight({
       title: siteTitle,
       customCss: ['./src/styles/custom.css'],
+      head: [{ tag: 'script', attrs: { src: '/kb-reading.js', defer: true } }],
+      // 围栏语言别名：仅映射到 shiki 真实存在的目标，无语法的降级 txt（免告警免加载）
+      expressiveCode: {
+        shiki: {
+          langAlias: {
+            Go: 'go',
+            Rust: 'rust',
+            Makefile: 'make',
+            cc: 'cpp',
+            h: 'c',
+            conf: 'ini',
+            sshconfig: 'ssh-config',
+            react: 'jsx',
+            swig: 'cpp',
+            gdb: 'txt',
+            msg: 'txt',
+            sudoers: 'txt',
+          },
+        },
+      },
       components: {
         Search: './src/components/Search.astro',
       },

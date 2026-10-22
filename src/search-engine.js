@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { create, insert, remove, search } from '@orama/orama';
+import { create, insert, remove, search, save, load } from '@orama/orama';
+import { slug as githubSlug } from 'github-slugger';
 
 const segmenter = new Intl.Segmenter('zh-CN', { granularity: 'word' });
 const STOP_WORDS = new Set(['的', '了', '在', '是', '我', '有', '和', '就', '不', '人', '都', '一', '一个', '上', '也', '很', '到', '说', '要', '去', '你', '会', '着', '没有', '看', '好', '自己', '这']);
@@ -26,17 +27,19 @@ function tokenizeChinese(text) {
 }
 
 export class OramaSearchManager {
-  constructor(contentDir) {
+  constructor(contentDir, indexPath) {
     this.contentDir = path.resolve(contentDir);
+    this.indexPath = indexPath
+      ? path.resolve(indexPath)
+      : path.resolve(process.cwd(), '.orama-index.json');
     this.db = null;
     this.initialized = false;
+    this.fileMTimes = {};
+    this._persistTimer = null;
   }
 
-  async init() {
-    if (this.initialized) return;
-    const t0 = performance.now();
-
-    this.db = await create({
+  _createDb() {
+    return create({
       schema: {
         id: 'string',
         title: 'string',
@@ -52,14 +55,91 @@ export class OramaSearchManager {
         },
       },
     });
+  }
 
-    const files = this.scanDir(this.contentDir);
-    for (const file of files) {
-      await this.upsertFile(file, false);
+  async init() {
+    if (this.initialized) return;
+    if (this._initPromise) return this._initPromise;
+    this._initPromise = (async () => {
+      const t0 = performance.now();
+
+      this.db = await this._createDb();
+
+      // 1) 尝试加载持久化索引（重启后避免全库重建）
+      let restored = false;
+      try {
+        const raw = fs.readFileSync(this.indexPath, 'utf-8');
+        const saved = JSON.parse(raw);
+        if (saved && saved.db && typeof saved.manifest === 'object' && saved.manifest !== null) {
+          load(this.db, saved.db);
+          this.fileMTimes = saved.manifest;
+          restored = true;
+          console.log(`[Orama] 已加载持久化索引: ${Object.keys(this.fileMTimes).length} 篇 (${this.indexPath})`);
+        }
+      } catch (err) {
+        console.log(`[Orama] 无可用持久化索引，执行全量构建: ${err.message}`);
+      }
+
+      // 2) 增量同步：新建/变更文件重新入索引，已删除文件从索引移除
+      const files = this.scanDir(this.contentDir);
+      const currentMTimes = {};
+      let changed = 0;
+      for (const file of files) {
+        const { id } = this.getRelInfo(file);
+        let mtime;
+        try {
+          mtime = fs.statSync(file).mtimeMs;
+        } catch {
+          continue;
+        }
+        currentMTimes[id] = mtime;
+        if (!restored || this.fileMTimes[id] !== mtime) {
+          await this.upsertFile(file, restored);
+          changed++;
+        }
+      }
+      if (restored) {
+        for (const id of Object.keys(this.fileMTimes)) {
+          if (!(id in currentMTimes)) {
+            try {
+              await remove(this.db, id);
+            } catch {}
+            delete this.fileMTimes[id];
+            changed++;
+          }
+        }
+      }
+      this.fileMTimes = currentMTimes;
+      this.persistNow();
+
+      this.initialized = true;
+      const total = Object.keys(this.fileMTimes).length;
+      console.log(`[Orama] 就绪: 共 ${total} 篇 (本次变更 ${changed} 篇) 耗时 ${(performance.now() - t0).toFixed(1)}ms`);
+    })();
+    return this._initPromise;
+  }
+
+  // 立即落盘（临时文件 + 原子替换，避免写一半损坏索引）
+  persistNow() {
+    try {
+      if (!this.db) return;
+      const payload = JSON.stringify({ manifest: this.fileMTimes, db: save(this.db) });
+      const tmp = this.indexPath + '.tmp';
+      fs.writeFileSync(tmp, payload);
+      fs.renameSync(tmp, this.indexPath);
+    } catch (err) {
+      console.error('[Orama] 索引持久化失败:', err.message);
     }
+  }
 
-    this.initialized = true;
-    console.log(`[Orama] Indexed ${files.length} notes in ${(performance.now() - t0).toFixed(1)}ms`);
+  // 变更后的防抖落盘（1.5s 静默窗口合并批量更新）
+  schedulePersist() {
+    if (!this.initialized) return;
+    if (this._persistTimer) clearTimeout(this._persistTimer);
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      this.persistNow();
+    }, 1500);
   }
 
   scanDir(dir) {
@@ -89,7 +169,7 @@ export class OramaSearchManager {
   }
 
   getRelInfo(rawPath) {
-    let p = rawPath.replace(/\\/g, '/');
+    let p = path.resolve(rawPath).replace(/\\/g, '/');
     let realBase = this.contentDir.replace(/\\/g, '/');
     try {
       realBase = fs.realpathSync(this.contentDir).replace(/\\/g, '/');
@@ -104,9 +184,14 @@ export class OramaSearchManager {
     }
 
     const rel = p.replace(/^\/+/, '').replace(/\.md$/, '');
-    const parts = rel.split('/');
+    const parts = rel.split('/').filter(Boolean);
     const category = parts.length > 1 ? parts[0] : '概览';
-    const url = '/' + parts.map(s => s.toLowerCase()).join('/') + '/';
+    const slugSegments = parts.map(segment => githubSlug(segment));
+    if (slugSegments[slugSegments.length - 1] === 'index') {
+      slugSegments.pop();
+    }
+    const slug = slugSegments.join('/');
+    const url = slug ? ('/' + slug + '/') : '/';
     return { id: rel, category, url };
   }
 
@@ -116,7 +201,11 @@ export class OramaSearchManager {
       const raw = fs.readFileSync(filePath, 'utf-8');
       const titleMatch = raw.match(/^#\s+(.+)$/m);
       const title = titleMatch ? titleMatch[1].trim() : path.basename(filePath, '.md');
-      const { id, category, url } = this.getRelInfo(filePath);
+      const { id, category, url: pathUrl } = this.getRelInfo(filePath);
+      // frontmatter slug 覆写路由（Astro 会把页面挂到 /<slug>/），URL 以真实路由为准
+      const slugMatch = raw.match(/^\+\+\+[\s\S]*?^slug\s*=\s*["']?([^"'\n]+)["']?\s*$[\s\S]*?^\+\+\+/m)
+        || raw.match(/^---[\s\S]*?^slug:\s*["']?([^"'\n]+)["']?\s*$[\s\S]*?^---/m);
+      const url = slugMatch ? ('/' + slugMatch[1].trim().replace(/^\/+|\/+$/g, '') + '/') : pathUrl;
 
       if (isIncremental && this.db) {
         try {
@@ -132,6 +221,10 @@ export class OramaSearchManager {
         content: raw.slice(0, 15000),
       });
 
+      // 记录 mtime 供启动时增量比对，并安排防抖落盘
+      this.fileMTimes[id] = fs.statSync(filePath).mtimeMs;
+      this.schedulePersist();
+
       if (isIncremental) {
         console.log(`[Orama] Incremental indexed: ${id}`);
       }
@@ -145,18 +238,23 @@ export class OramaSearchManager {
       const { id } = this.getRelInfo(filePath);
       if (this.db) {
         await remove(this.db, id);
+        delete this.fileMTimes[id];
+        this.schedulePersist();
         console.log(`[Orama] Removed index: ${id}`);
       }
     } catch {}
   }
 
   async query(term, limit = 15) {
+    if (!this.initialized && this._initPromise) {
+      await this._initPromise;
+    }
     if (!this.db || !term || !term.trim()) return [];
     const trimmed = term.trim();
 
     const res = await search(this.db, {
       term: trimmed,
-      limit: limit * 2,
+      limit,
       boost: {
         title: 5,
         category: 2,
@@ -165,14 +263,9 @@ export class OramaSearchManager {
     });
 
     const hits = [];
-    const lowerTerm = trimmed.toLowerCase();
 
     for (const h of res.hits) {
       const doc = h.document;
-      const titleLower = doc.title.toLowerCase();
-      const contentLower = doc.content.toLowerCase();
-
-      // 如果有明显相关性（标题或正文中至少出现过关键词子串或主要词项）
       const snippet = this.extractSnippet(doc.content, trimmed);
       hits.push({
         id: doc.id,
@@ -191,7 +284,8 @@ export class OramaSearchManager {
 
   extractSnippet(content, term) {
     if (!content) return '';
-    const clean = content.replace(/[#*`~\[\]\(\)>_-]/g, ' ').replace(/\s+/g, ' ');
+    // 顺带消灭 HTML 特殊字符，snippet 直入 innerHTML 不会注入
+    const clean = content.replace(/[#*`~\[\]\(\)><&=_-]/g, ' ').replace(/\s+/g, ' ');
     const lower = clean.toLowerCase();
     const idx = lower.indexOf(term.toLowerCase());
 
