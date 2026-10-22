@@ -12,3 +12,146 @@
   overflow-x: auto;
   white-space: pre;
 }
+
+/* ── 阅读布局：左右栏独立收起 ───────────────────────────── */
+.kb-toggle-group{display:flex;gap:2px;margin-inline-end:6px}
+.kb-toggle{display:inline-flex;align-items:center;justify-content:center;width:30px;height:30px;border:0;border-radius:6px;background:transparent;color:inherit;cursor:pointer;opacity:.7}
+.kb-toggle:hover{opacity:1;background:var(--sl-color-gray-6)}
+.kb-toggle[aria-pressed="true"]{opacity:1;background:var(--sl-color-gray-6);color:var(--sl-color-accent-high)}
+html[data-kb-hide-left] .sidebar-pane{display:none}
+html[data-kb-hide-right] .right-sidebar-container{display:none}
+html[data-kb-hide-left] .content-panel .sl-container,
+html[data-kb-hide-right] .content-panel .sl-container,
+html[data-kb-hide-left] .sl-markdown-content,
+html[data-kb-hide-right] .sl-markdown-content{max-width:var(--kb-content-width)!important}
+html[data-kb-hide-left] .main-frame{padding-inline-start:0!important}
+html[data-kb-hide-left] .main-pane,
+html[data-kb-hide-right] .main-pane{flex:1 1 auto;min-width:0}
+html[data-kb-hide-left]{--kb-content-width:56rem}
+html[data-kb-hide-right]{--kb-content-width:58rem}
+html[data-kb-hide-left][data-kb-hide-right]{--kb-content-width:76rem}
+@media (max-width:50rem){.kb-toggle-group{display:none}}
+
+/* ── 内容查看器（图片 / 表格 / 代码） ───────────────── */
+.sl-markdown-content svg,
+.sl-markdown-content img { cursor: zoom-in; }
+
+.kb-zoom {
+  position: fixed; inset: 0; width: 100%; height: 100%;
+  max-width: none; max-height: none; margin: 0; padding: 0; border: 0;
+  z-index: 99999; overflow: hidden; display: none;
+  background: rgba(8, 10, 14, .94);
+}
+.kb-zoom[open] { display: block; }
+.kb-zoom::backdrop { background: rgba(8, 10, 14, .94); }
+html.kb-zoom-open { overflow: hidden; }
+
+.kb-zoom-close {
+  position: absolute; top: 14px; right: 14px; z-index: 4;
+  width: 40px; height: 40px; padding: 0; border: 0; border-radius: 50%;
+  background: rgba(20, 22, 28, .6); color: #fff;
+  border: 1px solid rgba(255, 255, 255, .18);
+  font-size: 22px; line-height: 1; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.kb-zoom-close:hover { background: rgba(20, 22, 28, .85); }
+
+.kb-zoom-label {
+  position: absolute; top: 22px; left: 24px; z-index: 3;
+  max-width: 60vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  padding: 4px 10px; border-radius: 999px;
+  font-size: 13px; color: rgba(255, 255, 255, .85); pointer-events: none;
+  background: rgba(20, 22, 28, .55); border: 1px solid rgba(255, 255, 255, .12);
+}
+
+/* 画布：白底只包住内容，不再是一整块留白 */
+.kb-zoom-stage {
+  position: absolute; inset: 0; z-index: 1;
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden; touch-action: none; cursor: grab;
+}
+.kb-zoom-stage.kb-dragging { cursor: grabbing; }
+.kb-zoom-canvas {
+  transform-origin: center center; will-change: transform;
+  background: #fff; color: #1f2937; border-radius: 4px; line-height: 0;
+  box-shadow: 0 16px 60px rgba(0, 0, 0, .5);
+}
+.kb-zoom-canvas > svg,
+.kb-zoom-canvas > img { display: block; }
+
+.kb-zoom-bar {
+  position: absolute; left: 50%; bottom: 18px; transform: translateX(-50%);
+  z-index: 3; display: none; align-items: center; gap: 2px;
+  padding: 5px 7px; border-radius: 999px;
+  background: rgba(28, 32, 40, .92); border: 1px solid rgba(255, 255, 255, .14);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .35);
+}
+.kb-zoom[data-mode="media"] .kb-zoom-bar { display: flex; }
+.kb-zoom-bar button {
+  min-width: 34px; height: 34px; padding: 0 10px; border: 0; border-radius: 999px;
+  background: transparent; color: #fff; font-size: 13px; cursor: pointer;
+  white-space: nowrap;
+}
+.kb-zoom-bar button:hover { background: rgba(255, 255, 255, .14); }
+.kb-zoom-pct {
+  min-width: 56px; text-align: center; font-size: 12px;
+  color: rgba(255, 255, 255, .75); font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+
+.kb-zoom-tip {
+  position: absolute; left: 50%; bottom: 64px; transform: translateX(-50%);
+  z-index: 3; padding: 4px 12px; border-radius: 999px;
+  font-size: 12px; color: rgba(255, 255, 255, .8);
+  background: rgba(20, 22, 28, .55); border: 1px solid rgba(255, 255, 255, .12);
+  pointer-events: none; white-space: nowrap;
+}
+.kb-zoom[data-mode="panel"] .kb-zoom-tip { bottom: 18px; }
+
+/* 表格 / 代码：卡片式面板 */
+.kb-zoom-panel {
+  position: absolute; inset: 0; z-index: 2;
+  display: none; align-items: center; justify-content: center;
+  padding: 56px 32px 72px; pointer-events: none;
+}
+.kb-zoom[data-mode="panel"] .kb-zoom-panel { display: flex; }
+.kb-zoom[data-mode="panel"] .kb-zoom-stage { display: none; }
+.kb-zoom-inner {
+  pointer-events: auto; box-sizing: border-box;
+  width: min(95vw, 1400px); max-height: 82vh; overflow: auto;
+  padding: 20px; border-radius: 10px; background: #fff;
+  box-shadow: 0 20px 70px rgba(0, 0, 0, .5);
+}
+html[data-theme="dark"] .kb-zoom-inner { background: #1a1f2e; }
+
+.kb-zoom-inner.kb-zoom-table table {
+  margin: 0 auto; border-collapse: collapse; font-size: 16px; min-width: max-content;
+}
+.kb-zoom-inner.kb-zoom-table th,
+.kb-zoom-inner.kb-zoom-table td {
+  padding: 8px 14px; border: 1px solid var(--sl-color-gray-5);
+  text-align: left; vertical-align: top;
+}
+.kb-zoom-inner.kb-zoom-table th { background: var(--sl-color-gray-6); font-weight: 600; }
+
+.kb-zoom-inner.kb-zoom-code { padding: 0; }
+.kb-zoom-inner.kb-zoom-code .expressive-code { margin: 0; }
+.kb-zoom-inner.kb-zoom-code figure.frame { margin: 0; border-radius: 0; min-width: 100%; }
+.kb-zoom-inner.kb-zoom-code pre { margin: 0; font-size: 15px; line-height: 1.7; white-space: pre; }
+
+/* ── 表格 / 代码块放大按钮 ───────────────────────────── */
+.kb-zoom-wrap { position: relative; }
+figure.frame { position: relative; }
+.kb-zoom-btn {
+  position: absolute; top: 4px; right: 4px; z-index: 3;
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; padding: 0; border-radius: 6px;
+  border: 1px solid var(--sl-color-gray-5);
+  background: var(--sl-color-bg); color: var(--sl-color-text);
+  opacity: 0; cursor: pointer; transition: opacity .15s;
+}
+.kb-zoom-wrap:hover > .kb-zoom-btn,
+figure.frame:hover > .kb-zoom-btn,
+.kb-zoom-btn:focus-visible { opacity: .9; }
+.kb-zoom-btn:hover { opacity: 1; background: var(--sl-color-gray-6); }
+@media (hover: none) { .kb-zoom-btn { opacity: .8; } }

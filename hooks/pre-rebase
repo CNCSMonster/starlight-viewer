@@ -1,0 +1,8 @@
+#!/bin/bash
+# pub 分支永久禁止 rebase（rebase 重写已发布历史，无任何合法场景）
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+if [ "$branch" = "pub" ]; then
+  echo "⛔ pub 分支被冻结：禁止 rebase。" >&2
+  exit 1
+fi
+exit 0

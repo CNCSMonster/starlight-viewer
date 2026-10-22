@@ -1,0 +1,8 @@
+#!/bin/bash
+# pub 分支永久禁止 merge（连发布脚本也不用 merge 路径，无放行口）
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+if [ "$branch" = "pub" ]; then
+  echo "⛔ pub 分支被冻结：禁止 merge。公开仓只收 ./pub-release.sh 产生的单父 squash 发布 commit。" >&2
+  exit 1
+fi
+exit 0

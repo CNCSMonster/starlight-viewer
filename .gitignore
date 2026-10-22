@@ -18,3 +18,19 @@ Thumbs.db
 .codanna/
 .codannaignore
 .fastembed_cache
+
+# Orama 搜索索引持久化缓存（内存索引的磁盘快照，可再生）
+.orama-index.json
+.orama-index.json.tmp
+
+# 本地预览产物（架构图/截图，由工具生成，不入库）
+public/preview/
+
+# 本地备份（脚本改动前的时间戳副本，不入库）
+*.bak-*
+
+# 本地预览页（iframe 指向 public/preview/ 的产物，公开仓不含产物故不入库）
+src/pages/sbx-preview/
+
+# 本地截图辅助页（iframe 定位工具，含内部路径）
+public/_shot.html

@@ -1,0 +1,10 @@
+#!/bin/bash
+# pub 分支永久冻结：禁止任何直接 commit / --amend。
+# 发布只有一条合法路径：./pub-release.sh（git commit-tree 构造单父 squash commit，天然不触发本钩子）。
+branch=$(git symbolic-ref --short HEAD 2>/dev/null)
+if [ "$branch" = "pub" ]; then
+  echo "⛔ pub 分支被冻结：禁止直接 commit / --amend。" >&2
+  echo "   发布请走 ./pub-release.sh。" >&2
+  exit 1
+fi
+exit 0

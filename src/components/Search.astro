@@ -50,8 +50,13 @@
 
 <script>
 	class SiteSearch extends HTMLElement {
-		constructor() {
-			super();
+		connectedCallback() {
+			if (this.dataset.initialized === 'true') return;
+			this.dataset.initialized = 'true';
+			this.setup();
+		}
+
+		setup() {
 			const openBtn = this.querySelector('[data-open-modal]');
 			const closeBtn = this.querySelector('[data-close-modal]');
 			const dialog = this.querySelector('dialog');
@@ -59,15 +64,18 @@
 			const resultsContainer = this.querySelector('#orama-search-results');
 			let activeIndex = -1;
 			let debounceTimer = null;
+			let activeController = null;
 
 			const openDialog = () => {
+				if (!dialog) return;
 				dialog.showModal();
 				document.body.style.overflow = 'hidden';
-				input.focus();
-				input.select();
+				input?.focus();
+				input?.select();
 			};
 
 			const closeDialog = () => {
+				if (!dialog) return;
 				dialog.close();
 				document.body.style.overflow = '';
 			};
@@ -75,19 +83,28 @@
 			openBtn?.addEventListener('click', openDialog);
 			closeBtn?.addEventListener('click', closeDialog);
 
-			dialog.addEventListener('click', (e) => {
+			dialog?.addEventListener('click', (e) => {
 				if (e.target === dialog) closeDialog();
+			});
+
+			resultsContainer?.addEventListener('click', (e) => {
+				const link = e.target.closest('a');
+				if (link) {
+					closeDialog();
+				}
 			});
 
 			window.addEventListener('keydown', (e) => {
 				if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
 					e.preventDefault();
-					dialog.open ? closeDialog() : openDialog();
+					dialog?.open ? closeDialog() : openDialog();
 				}
-				if (e.key === 'Escape' && dialog.open) {
+				if (e.key === 'Escape' && dialog?.open) {
 					closeDialog();
 				}
 			});
+
+			const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
 			const renderResults = (hits) => {
 				if (!hits || hits.length === 0) {
@@ -98,10 +115,10 @@
 
 				activeIndex = 0;
 				resultsContainer.innerHTML = hits.map((hit, idx) => `
-					<a href="${hit.url}" class="orama-result-item ${idx === 0 ? 'active' : ''}" data-idx="${idx}">
+					<a href="${esc(hit.url)}" class="orama-result-item ${idx === 0 ? 'active' : ''}" data-idx="${idx}">
 						<div class="orama-result-top">
-							<span class="orama-category-tag">${hit.category}</span>
-							<span class="orama-title">${hit.title}</span>
+							<span class="orama-category-tag">${esc(hit.category)}</span>
+							<span class="orama-title">${esc(hit.title)}</span>
 						</div>
 						${hit.snippet ? `<div class="orama-snippet">${hit.snippet}</div>` : ''}
 					</a>
@@ -119,21 +136,39 @@
 			input?.addEventListener('input', (e) => {
 				const term = e.target.value.trim();
 				clearTimeout(debounceTimer);
+				if (activeController) {
+					activeController.abort();
+					activeController = null;
+				}
+
 				if (!term) {
 					resultsContainer.innerHTML = '<div class="orama-empty-state">输入关键词开始全库增量检索</div>';
 					return;
 				}
 
+				resultsContainer.innerHTML = '<div class="orama-empty-state orama-loading">🔍 正在检索全库笔记...</div>';
+
 				debounceTimer = setTimeout(async () => {
-					try {
-						const res = await fetch('/api/search?q=' + encodeURIComponent(term));
-						if (!res.ok) return;
-						const hits = await res.json();
-						renderResults(hits);
-					} catch (err) {
-						console.error('Search error:', err);
+					activeController = new AbortController();
+					const signal = activeController.signal;
+
+					for (let attempt = 0; attempt < 2; attempt++) {
+						try {
+							const res = await fetch('/api/search?q=' + encodeURIComponent(term), { signal });
+							if (res.ok) {
+								const hits = await res.json();
+								renderResults(hits);
+								return;
+							}
+						} catch (err) {
+							if (err.name === 'AbortError') return;
+							console.error('Search error:', err);
+						}
+						// 非 2xx 与网络异常统一退避后再试
+						if (attempt === 0) await new Promise(r => setTimeout(r, 200));
 					}
-				}, 100);
+					resultsContainer.innerHTML = '<div class="orama-empty-state">⚠️ 检索服务正忙或正在刷新索引，请稍候重试</div>';
+				}, 120);
 			});
 
 			input?.addEventListener('keydown', (e) => {
@@ -291,6 +326,10 @@
 		text-align: center;
 		color: var(--sl-color-gray-3);
 		font-size: var(--sl-text-sm);
+	}
+
+	.orama-loading {
+		color: var(--sl-color-accent-high);
 	}
 
 	.orama-result-item {

@@ -1,0 +1,62 @@
+#!/bin/bash
+# 组合推送闸门（按远端 URL 判定，不依赖远端名字——改名/加新 remote 都绕不过）：
+#   远端 = 私有 bare        → 高频迭代放行，不设闸
+#   远端 = GitHub 公开仓    → 四重闸：
+#     1. refspec 闸：只允许 pub:main 一种推送形态
+#     2. 单父闸：待推 commit 不得含 merge commit（防私有历史随父链泄漏）
+#     3. 私史闸：待推 commit 不得属于 main 的历史（防 ff-merge 偷渡）
+#     4. 追平闸：被推 commit 的内容树必须与 main 完全一致（整批发布，杜绝半批/cherry-pick 早泄）
+#   末尾叠加时段闸（git-time-gate）
+url="$2"
+case "$url" in
+  *github.com/CNCSMonster/starlight-viewer*) ;;
+  *) exit 0 ;;
+esac
+
+zero=0000000000000000000000000000000000000000
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  # 闸 1：只允许 pub:main
+  if [ "$local_ref" != "refs/heads/pub" ] || [ "$remote_ref" != "refs/heads/main" ]; then
+    echo "⛔ pub 闸门：只允许推送 pub 分支到公开仓 main（pub:main）。" >&2
+    echo "   拒绝: ${local_ref} -> ${remote_ref}；私有迭代请推 origin。" >&2
+    exit 1
+  fi
+
+  if [ "$local_sha" = "$zero" ]; then
+    echo "⛔ pub 闸门：禁止删除公开仓分支。" >&2
+    exit 1
+  fi
+
+  if [ "$remote_sha" = "$zero" ]; then
+    echo "⛔ pub 闸门：公开仓 main 不存在（远端 sha 为零），需人工确认后手动推送。" >&2
+    exit 1
+  fi
+
+  # 闸 2：单父不变量
+  merges=$(git rev-list --min-parents=2 "$remote_sha..$local_sha" 2>/dev/null)
+  if [ -n "$merges" ]; then
+    echo "⛔ pub 闸门：待推历史含 merge commit（公开仓只收单父 squash 发布 commit）：" >&2
+    echo "$merges" >&2
+    exit 1
+  fi
+
+  # 闸 3：私史不变量（ff-merge / 直接引用私有提交）
+  for c in $(git rev-list "$remote_sha..$local_sha" 2>/dev/null); do
+    if git merge-base --is-ancestor "$c" main 2>/dev/null; then
+      echo "⛔ pub 闸门：commit $c 属于 main 私有历史，禁止公开。" >&2
+      echo "   疑似在 pub 上执行了 ff-merge，请走 ./pub-release.sh。" >&2
+      exit 1
+    fi
+  done
+
+  # 闸 4：追平不变量（被推内容必须恰为 main 当前整批内容）
+  if ! git diff --quiet "$local_sha" main; then
+    echo "⛔ pub 闸门：待推内容与 main 不一致（只支持整批同步发布）。" >&2
+    echo "   请走 ./pub-release.sh 重新生成发布 commit。" >&2
+    exit 1
+  fi
+done
+
+# 时段闸（公开仓仅限允许窗口内 commit/push）
+exec "$(dirname "$0")/git-time-gate.sh"
