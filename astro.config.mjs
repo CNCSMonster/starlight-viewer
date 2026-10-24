@@ -12,6 +12,25 @@ const searchManager = new OramaSearchManager(
   path.resolve(process.cwd(), '.orama-index.json'),
 );
 
+// 开发预览专用：Vite dev 会把 /_astro/ec.<hash>.css 当 JS 模块返回（Content-Type: text/javascript），
+// 而 Expressive Code 注入的是 <link rel="stylesheet">，浏览器按 MIME 拒绝加载，
+// 导致开发预览里所有代码块没有高亮（生产构建产物是真 CSS，不受影响）。
+// 给该请求补 ?direct 让 Vite 直接回 CSS；apply: 'serve' 保证不进生产构建。
+function expressiveCodeCssDevFix() {
+  return {
+    name: 'expressive-code-css-dev-fix',
+    apply: 'serve',
+    configureServer(server) {
+      server.middlewares.use((req, _res, next) => {
+        if (req.url && /^\/_astro\/ec\.[^?]+\.css$/.test(req.url)) {
+          req.url += '?direct';
+        }
+        next();
+      });
+    },
+  };
+}
+
 function compressionPlugin() {
   return {
     name: 'starlight-compression-plugin',
@@ -247,11 +266,12 @@ function getDynamicSidebar() {
   };
 
   // 空目录（如历史遗留的百分号编码目录骨架）不进侧边栏
-  const hasMarkdown = (dir) => {
+  // 同时检查 Markdown 和 HTML 文件
+  const hasContent = (dir) => {
     for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
       if (e.isDirectory()) {
-        if (hasMarkdown(path.join(dir, e.name))) return true;
-      } else if (e.name.endsWith('.md')) {
+        if (hasContent(path.join(dir, e.name))) return true;
+      } else if (e.name.endsWith('.md') || e.name.endsWith('.html')) {
         return true;
       }
     }
@@ -264,29 +284,80 @@ function getDynamicSidebar() {
       if (envExcludes.includes(entry.name.toLowerCase())) {
         continue;
       }
-      if (!hasMarkdown(path.join(docsDir, entry.name))) {
+      if (!hasContent(path.join(docsDir, entry.name))) {
         continue;
       }
       const label = labelsMap[entry.name] || `📁 ${entry.name}`;
+      
+      // 扫描该目录下的 HTML 文件，生成手动链接项
+      const htmlItems = [];
+      const dirPath = path.join(docsDir, entry.name);
+      try {
+        const dirEntries = fs.readdirSync(dirPath, { withFileTypes: true });
+        for (const de of dirEntries) {
+          if (de.isFile() && de.name.endsWith('.html')) {
+            const slug = de.name.replace('.html', '');
+            htmlItems.push({
+              label: slug,
+              link: `/html/${entry.name}/${slug}`,
+            });
+          }
+        }
+      } catch (e) {
+        // 忽略读取错误
+      }
+      
+      // 组合 autogenerate（Markdown）和手动 HTML 链接
+      const items = [{ autogenerate: { directory: entry.name, collapsed: true } }];
+      if (htmlItems.length > 0) {
+        items.push(...htmlItems);
+      }
+      
       sidebar.push({
         label,
         collapsed: entry.name !== 'WIP',
         // collapsed: true → 子组默认折叠；当前页所在链路由 Starlight 自动展开（sidebarGroupHasCurrent）
-        items: [{ autogenerate: { directory: entry.name, collapsed: true } }],
+        items,
       });
     }
   }
 
-  // 本地预览区：仅当 public/preview 存在时显示，避免把预览产物写进内容库
-  const previewDir = path.join(process.cwd(), 'public', 'preview', 'multica-sandbox');
-  if (fs.existsSync(previewDir)) {
+  // 本地预览区：扫描 alchemy/content/preview/ 下的 HTML 文件，自动生成侧边栏项
+  const contentPreviewDir = path.join(process.cwd(), '../alchemy/content/preview');
+  const previewItems = [];
+  
+  function scanPreviewDir(dir, prefix = '') {
+    try {
+      if (!fs.existsSync(dir)) return;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        
+        if (entry.isFile() && entry.name.endsWith('.html')) {
+          const slug = entry.name.replace('.html', '');
+          previewItems.push({
+            label: prefix ? `${prefix}/${slug}` : slug,
+            link: `/html/preview/${relPath.replace('.html', '')}`,
+          });
+        } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          scanPreviewDir(fullPath, relPath);
+        }
+      }
+    } catch (e) {
+      console.warn('[preview] 扫描目录失败:', dir, e.message);
+    }
+  }
+  
+  if (fs.existsSync(contentPreviewDir)) {
+    scanPreviewDir(contentPreviewDir);
+  }
+  
+  if (previewItems.length > 0) {
     sidebar.push({
       label: '🖼️ 本地预览',
       collapsed: true,
-      items: [
-        { label: 'Multica 沙箱 · 单实例架构', link: '/sbx-preview/single' },
-        { label: 'Multica 沙箱 · 多实例拓扑', link: '/sbx-preview/multi' },
-      ],
+      items: previewItems,
     });
   }
 
@@ -299,7 +370,7 @@ export default defineConfig({
     '/': '/readme',
   },
   vite: {
-    plugins: [compressionPlugin(), oramaSearchPlugin()],
+    plugins: [compressionPlugin(), oramaSearchPlugin(), expressiveCodeCssDevFix()],
   },
   integrations: [
     starlight({
