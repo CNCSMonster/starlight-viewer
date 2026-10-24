@@ -1,0 +1,62 @@
+---
+// 通用 HTML 路由：自动发现 alchemy/content/ 下的 HTML 文件
+// 路由格式：/html/<相对路径>（不含 .html 扩展名）
+import fs from 'node:fs';
+import path from 'node:path';
+
+export async function getStaticPaths() {
+  // 固定路径：starlight-viewer 位于 /home/ccm/my-docs/starlight-viewer
+  // alchemy/content 位于 /home/ccm/my-docs/alchemy/content
+  const CONTENT_DIR = '/home/ccm/my-docs/alchemy/content';
+  const files = [];
+  
+  function scanDir(dir, prefix = '') {
+    try {
+      if (!fs.existsSync(dir)) return;
+      const entries = fs.readdirSync(dir, { withFileTypes: true });
+      for (const entry of entries) {
+        const fullPath = path.join(dir, entry.name);
+        const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+        
+        if (entry.isFile() && entry.name.endsWith('.html')) {
+          files.push({ params: { path: relPath.replace('.html', '') } });
+        } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+          scanDir(fullPath, relPath);
+        }
+      }
+    } catch (e) {
+      console.warn('[html] 扫描目录失败:', dir, e.message);
+    }
+  }
+  
+  scanDir(CONTENT_DIR);
+  return files;
+}
+
+// 组件渲染时重新定义 CONTENT_DIR
+const CONTENT_DIR = '/home/ccm/my-docs/alchemy/content';
+const { path: slug } = Astro.params;
+const htmlPath = path.join(CONTENT_DIR, `${slug}.html`);
+
+let html = '';
+try {
+  html = fs.readFileSync(htmlPath, 'utf-8');
+} catch (e) {
+  return Astro.redirect('/404');
+}
+---
+
+<html>
+<head>
+  <title>{slug.split('/').pop()}</title>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <style>
+    body { margin: 0; padding: 0; overflow: auto; }
+    iframe { width: 100%; height: 100vh; border: 0; display: block; }
+  </style>
+</head>
+<body>
+  <iframe srcdoc={html} title={slug}></iframe>
+</body>
+</html>
