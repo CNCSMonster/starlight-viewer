@@ -163,20 +163,34 @@ function oramaSearchPlugin() {
         }, 300);
       };
 
+      // 侧边栏是配置期计算的，目录/HTML 的增删必须重建配置才能反映到导航。
+      // 统一走“先内存刷新、再防抖 touch 配置触发 Astro 重载”，避免每个事件都重启。
+      const isDocsPath = (p) => {
+        const n = path.resolve(p);
+        return n === docsDir || n.startsWith(docsDir + path.sep) ||
+          n === docsReal || n.startsWith(docsReal + path.sep);
+      };
+      const isDocsHtml = (p) => isDocsPath(p) && path.resolve(p).endsWith('.html');
+
       let dirReloadTimer = null;
+      const rebuildSidebarSoon = (reason) => {
+        console.log(`📁 [Starlight] ${reason}：重建侧边栏`);
+        triggerSidebarReload();
+        if (dirReloadTimer) clearTimeout(dirReloadTimer);
+        dirReloadTimer = setTimeout(() => {
+          try {
+            const now = new Date();
+            fs.utimesSync(configFile, now, now);
+          } catch {}
+        }, 1200);
+      };
+
+      // 任意层级的目录新增/删除都触发（顶级分类、子目录都算）
       server.watcher.on('addDir', (dirPath) => {
-        const parent = path.dirname(dirPath);
-        if (parent === docsDir) {
-          console.log('📁 [Starlight] 检测到顶级分类目录变动：先内存刷新，再防抖重载配置');
-          triggerSidebarReload();
-          if (dirReloadTimer) clearTimeout(dirReloadTimer);
-          dirReloadTimer = setTimeout(() => {
-            try {
-              const now = new Date();
-              fs.utimesSync(configFile, now, now);
-            } catch {}
-          }, 1200);
-        }
+        if (isDocsPath(dirPath)) rebuildSidebarSoon('检测到目录新增');
+      });
+      server.watcher.on('unlinkDir', (dirPath) => {
+        if (isDocsPath(dirPath)) rebuildSidebarSoon('检测到目录删除');
       });
 
       // 批量同步笔记时 watcher 事件风暴防抖：200ms 静默窗口合并 upsert/remove
@@ -201,6 +215,8 @@ function oramaSearchPlugin() {
           pendingSearchOps.set(filePath, { filePath, op: 'upsert' });
           scheduleSearchFlush();
           triggerSidebarReload();
+        } else if (isDocsHtml(filePath)) {
+          rebuildSidebarSoon('检测到 HTML 新增');
         }
       });
 
@@ -216,6 +232,8 @@ function oramaSearchPlugin() {
           pendingSearchOps.set(filePath, { filePath, op: 'remove' });
           scheduleSearchFlush();
           triggerSidebarReload();
+        } else if (isDocsHtml(filePath)) {
+          rebuildSidebarSoon('检测到 HTML 删除');
         }
       });
 
@@ -289,20 +307,28 @@ function getDynamicSidebar() {
       }
       const label = labelsMap[entry.name] || `📁 ${entry.name}`;
       
-      // 扫描该目录下的 HTML 文件，生成手动链接项
+      // preview 由单独的「本地预览」组递归处理，跳过避免重复入口
+      if (entry.name === 'preview') continue;
+
+      // 递归扫描该分类下的 HTML 文件，生成手动链接项
       const htmlItems = [];
       const dirPath = path.join(docsDir, entry.name);
-      try {
-        const dirEntries = fs.readdirSync(dirPath, { withFileTypes: true });
-        for (const de of dirEntries) {
-          if (de.isFile() && de.name.endsWith('.html')) {
-            const slug = de.name.replace('.html', '');
+      const collectHtml = (dir, prefix = '') => {
+        for (const de of fs.readdirSync(dir, { withFileTypes: true })) {
+          const rel = prefix ? `${prefix}/${de.name}` : de.name;
+          if (de.isDirectory() && !de.name.startsWith('.')) {
+            collectHtml(path.join(dir, de.name), rel);
+          } else if (de.isFile() && de.name.endsWith('.html')) {
+            const slug = rel.replace(/\.html$/, '');
             htmlItems.push({
               label: slug,
               link: `/html/${entry.name}/${slug}`,
             });
           }
         }
+      };
+      try {
+        collectHtml(dirPath);
       } catch (e) {
         // 忽略读取错误
       }
