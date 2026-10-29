@@ -11,6 +11,8 @@ export const WHEEL_ZOOM_K = 0.002;
 export const MAX_ZOOM_EXPONENT = 0.35;
 export const MIN_SCALE = 0.05;
 export const MAX_SCALE = 12;
+export const MIN_READABLE_FONT_SIZE = 11;
+export const DEFAULT_BASE_FONT_SIZE = 14;
 
 /** 整图装进容器的基准倍率；只按宽度适配会裁掉竖长图下半张，故同时受高度约束。 */
 export function computeFitScale(containerW, containerH, naturalW, naturalH) {
@@ -40,4 +42,24 @@ export function zoomView(view, cx, cy, factor) {
     x: cx - (cx - view.x) * ratio,
     y: cy - (cy - view.y) * ratio,
   };
+}
+
+/**
+ * 计算适应窗口后的估计字号与提示文案。
+ * 若估计字号 < 11px，提示已适配全图并展示缩放百分比，引导用户放大；
+ * 否则使用常规交互提示。
+ */
+export function computeFitHint(scale, { baseFontSize = DEFAULT_BASE_FONT_SIZE, isFullscreen = false } = {}) {
+  const effectiveSize = scale * baseFontSize;
+  const isSmall = effectiveSize < MIN_READABLE_FONT_SIZE;
+  const pct = Math.round(scale * 100);
+
+  if (isSmall) {
+    return isFullscreen
+      ? `已适配全图（${pct}%），双指张开或滚轮缩放 · 拖拽平移 · 双击复位 · Esc 退出全屏`
+      : `已适配全图（${pct}%），双指张开或点击＋放大 · 拖拽平移 · 双击复位`;
+  }
+  return isFullscreen
+    ? '双指张开/并拢或滚轮缩放 · 拖拽平移 · 双击复位 · Esc 退出全屏'
+    : '双指张开/并拢缩放 · 拖拽平移 · 双击复位';
 }

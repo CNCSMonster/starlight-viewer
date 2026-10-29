@@ -11,7 +11,7 @@
  * 默认主题节点本来对比度足够，不会被动；light 主题保留作者原色。
  */
 
-export const MIN_TEXT_CONTRAST = 4.5;
+export const MIN_TEXT_CONTRAST = 5.0;
 export const GLARE_LUMINANCE = 0.25;
 export const DARK_FILL_ALPHA = 0.32;
 export const DARK_NODE_BASE = [31, 32, 32]; // mermaid dark 默认节点底色 #1f2020
@@ -43,6 +43,8 @@ export function contrastRatio(a, b) {
 export function parseColorString(value) {
   if (!value || value === 'none' || value === 'transparent') return null;
   const text = String(value).trim();
+  // 渐变/pattern/图片 fill（如 url(#...)）不做猜测，保持原样
+  if (text.startsWith('url(') || text.includes('url(')) return null;
   const hex = /^#([0-9a-f]{3,8})$/i.exec(text);
   if (hex) {
     let h = hex[1];
@@ -97,15 +99,31 @@ export function pickTextColor(backgroundLuminance, currentLuminance) {
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 let canvasCtx;
-const domParseColor = (value) => {
+
+export const isUnresolvableColor = (value) => {
+  if (!value || value === 'none' || value === 'transparent') return true;
+  const text = String(value).trim().toLowerCase();
+  return text.startsWith('url(') || text.includes('url(');
+};
+
+export const domParseColor = (value) => {
+  if (isUnresolvableColor(value)) return null;
   const parsed = parseColorString(value);
   if (parsed) return parsed;
   // 命名颜色 / color() 等交给浏览器离屏 canvas 归一化
   if (typeof document === 'undefined') return null;
   if (!canvasCtx) canvasCtx = document.createElement('canvas').getContext('2d');
   if (!canvasCtx) return null;
-  canvasCtx.fillStyle = '#000';
+  canvasCtx.fillStyle = '#000000';
   canvasCtx.fillStyle = value;
+  if (
+    canvasCtx.fillStyle === '#000000' &&
+    String(value).trim().toLowerCase() !== '#000' &&
+    String(value).trim().toLowerCase() !== '#000000' &&
+    String(value).trim().toLowerCase() !== 'black'
+  ) {
+    return null;
+  }
   return parseColorString(canvasCtx.fillStyle);
 };
 
@@ -125,6 +143,7 @@ export function postProcessMermaidSvg(svg, { dark = false } = {}) {
     if (!shape) continue;
 
     const fill = getComputedStyle(shape).fill;
+    if (isUnresolvableColor(fill)) continue;
     const parsed = domParseColor(fill);
     if (!parsed) continue;
     const rgb = compositeColor(parsed, page);
