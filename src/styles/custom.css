@@ -155,3 +155,103 @@ figure.frame:hover > .kb-zoom-btn,
 .kb-zoom-btn:focus-visible { opacity: .9; }
 .kb-zoom-btn:hover { opacity: 1; background: var(--sl-color-gray-6); }
 @media (hover: none) { .kb-zoom-btn { opacity: .8; } }
+
+/* ── Mermaid 图表：内联缩放 / 平移查看器 ───────────────── */
+/* 容器固定高度 + overflow hidden，图超出部分靠缩放平移查看，而不是把整张图压小 */
+.kb-mermaid {
+  /* 全屏配色集中在这里，便于主题层覆盖；浅色主题下 SVG 为深色系 → 白底 */
+  --kb-mermaid-fs-bg: #fff;
+  --kb-mermaid-fs-fg: #1f2937;
+  --kb-mermaid-fs-muted: #4b5563;
+  --kb-mermaid-fs-border: #d1d5db;
+  --kb-mermaid-fs-hover: #f3f4f6;
+  position: relative; margin: 1.25rem 0;
+  border: 1px solid var(--sl-color-gray-5); border-radius: 8px;
+  background: var(--sl-color-bg); overflow: hidden;
+}
+/* 深色主题下 mermaid 输出浅色 SVG，全屏必须保持深底，否则浅灰文字配白底不可读 */
+html[data-theme="dark"] .kb-mermaid {
+  --kb-mermaid-fs-bg: #0b0d12;
+  --kb-mermaid-fs-fg: var(--sl-color-text);
+  --kb-mermaid-fs-muted: var(--sl-color-gray-3);
+  --kb-mermaid-fs-border: var(--sl-color-gray-5);
+  --kb-mermaid-fs-hover: var(--sl-color-gray-6);
+}
+.kb-mermaid__stage {
+  position: relative; height: 70vh; min-height: 320px;
+  overflow: hidden; cursor: grab; touch-action: none;
+  contain: layout paint;
+}
+.kb-mermaid__stage.is-dragging { cursor: grabbing; }
+.kb-mermaid__stage:focus-visible {
+  outline: 2px solid var(--sl-color-accent); outline-offset: -2px;
+}
+.kb-mermaid__canvas {
+  position: absolute; top: 0; left: 0; transform-origin: 0 0;
+  will-change: transform; backface-visibility: hidden;
+}
+/* 解除 Starlight 正文对 svg 的 max-width 限制，按 viewBox 自然尺寸渲染 */
+.kb-mermaid__canvas svg { display: block; max-width: none !important; height: auto; }
+
+.kb-mermaid__tools { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; align-items: center; gap: 4px; }
+/* 控件尺寸与字形无关：固定 flex-basis + box-sizing，避免系统字体把 ＋/－ 撑成不同大小造成错位 */
+.kb-mermaid__tools button {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto; box-sizing: border-box;
+  width: 28px; height: 28px; padding: 0; margin: 0; border-radius: 6px;
+  border: 1px solid var(--sl-color-gray-5);
+  background: var(--sl-color-bg); color: var(--sl-color-text);
+  font-size: 0; line-height: 0; cursor: pointer; opacity: .75;
+}
+.kb-mermaid__tools button svg { display: block; }
+.kb-mermaid__tools button:hover { opacity: 1; background: var(--sl-color-gray-6); }
+.kb-mermaid__tools button[hidden] { display: none; }
+
+.kb-mermaid__hint {
+  padding: 4px 10px; border-top: 1px solid var(--sl-color-gray-6);
+  font-size: 12px; color: var(--sl-color-gray-3);
+}
+
+/* ── Mermaid 全屏：容器铺满视口，背景保证与 SVG 的对比度 ─────
+   浅色主题下 SVG 是深色系 → 白底；深色主题下渲染器输出浅色系 SVG，
+   此时仍用白底会出现浅灰文字配白底（对比度约 1.6，不可读），故跟随主题用深底 */
+.kb-mermaid:fullscreen,
+.kb-mermaid[data-kb-fullscreen] {
+  display: flex; flex-direction: column;
+  width: 100vw; height: 100vh; max-width: none; max-height: none;
+  margin: 0; border: 0; border-radius: 0;
+  background: var(--kb-mermaid-fs-bg);
+}
+.kb-mermaid:fullscreen::backdrop { background: #fff; }
+html[data-theme="dark"] .kb-mermaid:fullscreen::backdrop { background: #0b0d12; }
+.kb-mermaid:fullscreen .kb-mermaid__stage,
+.kb-mermaid[data-kb-fullscreen] .kb-mermaid__stage {
+  flex: 1 1 auto; height: auto; min-height: 0;
+}
+/* 全屏时控件与提示跟随变量配色，避免深色主题下白字白底 */
+.kb-mermaid:fullscreen .kb-mermaid__tools button,
+.kb-mermaid[data-kb-fullscreen] .kb-mermaid__tools button {
+  background: var(--kb-mermaid-fs-bg); color: var(--kb-mermaid-fs-fg);
+  border-color: var(--kb-mermaid-fs-border);
+}
+.kb-mermaid:fullscreen .kb-mermaid__tools button:hover,
+.kb-mermaid[data-kb-fullscreen] .kb-mermaid__tools button:hover {
+  background: var(--kb-mermaid-fs-hover);
+}
+.kb-mermaid:fullscreen .kb-mermaid__hint,
+.kb-mermaid[data-kb-fullscreen] .kb-mermaid__hint {
+  color: var(--kb-mermaid-fs-muted); border-top-color: var(--kb-mermaid-fs-border);
+  background: var(--kb-mermaid-fs-bg);
+}
+
+/* 渲染失败：保留原始代码块并加醒目边框，便于排查 */
+.kb-mermaid-error { outline: 2px dashed var(--sl-color-orange, #e07b39); outline-offset: 2px; }
+
+@media (max-width: 50rem) { .kb-mermaid__stage { height: 56vh; } }
+
+@media print {
+  .kb-mermaid { border: 0; }
+  .kb-mermaid__stage { height: auto; overflow: visible; }
+  .kb-mermaid__canvas { position: static; transform: none !important; }
+  .kb-mermaid__tools, .kb-mermaid__hint { display: none; }
+}

@@ -443,6 +443,8 @@
     });
 
     content.querySelectorAll('figure.frame').forEach(function (f) {
+      // mermaid 代码块由懒加载渲染器接管（自带缩放平移），不挂「放大代码」按钮
+      if (f.querySelector('pre[data-language="mermaid"]')) return;
       addZoomButton(f, 'code', f, '放大查看这段代码');
     });
 
@@ -469,6 +471,8 @@
   // 图（SVG / img）点击进入查看器；表格和代码用右上角按钮，避免抢走选中复制
   document.addEventListener('click', function (e) {
     if (e.target.closest && e.target.closest('a,.kb-zoom-btn,button')) return;
+    // mermaid 图自带内联缩放平移，点击交给它处理，不再弹出全屏查看器
+    if (e.target.closest && e.target.closest('.kb-mermaid')) return;
     var t = e.target.closest && e.target.closest('.sl-markdown-content svg, .sl-markdown-content img');
     if (!t) return;
     e.preventDefault();

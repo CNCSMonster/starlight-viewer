@@ -5,6 +5,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import zlib from 'node:zlib';
 import { OramaSearchManager } from './src/search-engine.js';
+import { ensureMermaidBundle } from './scripts/build-mermaid.mjs';
 
 const docsDir = path.resolve(process.cwd(), 'src/content/docs');
 const searchManager = new OramaSearchManager(
@@ -12,21 +13,19 @@ const searchManager = new OramaSearchManager(
   path.resolve(process.cwd(), '.orama-index.json'),
 );
 
-// 开发预览专用：Vite dev 会把 /_astro/ec.<hash>.css 当 JS 模块返回（Content-Type: text/javascript），
-// 而 Expressive Code 注入的是 <link rel="stylesheet">，浏览器按 MIME 拒绝加载，
-// 导致开发预览里所有代码块没有高亮（生产构建产物是真 CSS，不受影响）。
-// 给该请求补 ?direct 让 Vite 直接回 CSS；apply: 'serve' 保证不进生产构建。
-function expressiveCodeCssDevFix() {
+// mermaid 渲染器打包产物（public/mermaid-render.js，约 5MB，gzip 后约 1.4MB）不入库：
+// dev/build 启动时在此按 mtime 增量重建，源文件与依赖锁未变则跳过。
+function mermaidLazyBundle() {
   return {
-    name: 'expressive-code-css-dev-fix',
-    apply: 'serve',
-    configureServer(server) {
-      server.middlewares.use((req, _res, next) => {
-        if (req.url && /^\/_astro\/ec\.[^?]+\.css$/.test(req.url)) {
-          req.url += '?direct';
+    name: 'starlight-mermaid-lazy-bundle',
+    hooks: {
+      'astro:config:setup': async () => {
+        const built = await ensureMermaidBundle();
+        if (built) {
+          const size = (fs.statSync('public/mermaid-render.js').size / 1048576).toFixed(2);
+          console.log(`🧩 [mermaid] 渲染器已重新打包 public/mermaid-render.js (${size} MB)`);
         }
-        next();
-      });
+      },
     },
   };
 }
@@ -396,15 +395,22 @@ export default defineConfig({
     '/': '/readme',
   },
   vite: {
-    plugins: [compressionPlugin(), oramaSearchPlugin(), expressiveCodeCssDevFix()],
+    plugins: [compressionPlugin(), oramaSearchPlugin()],
   },
   integrations: [
+    mermaidLazyBundle(),
     starlight({
       title: siteTitle,
       customCss: ['./src/styles/custom.css'],
-      head: [{ tag: 'script', attrs: { src: '/kb-reading.js', defer: true } }],
+      head: [
+        { tag: 'script', attrs: { src: '/kb-reading.js', defer: true } },
+        { tag: 'script', attrs: { src: '/mermaid-client.js', defer: true } },
+      ],
       // 围栏语言别名：仅映射到 shiki 真实存在的目标，无语法的降级 txt（免告警免加载）
       expressiveCode: {
+        // dev 下内联 Expressive Code 样式，绕开 Vite 把 /_astro/ec.*.css 以 text/plain 回包的 dev MIME 问题；
+        // 构建仍输出可长期缓存的外部 CSS（生产构建产物不受 dev 管道影响）。
+        emitExternalStylesheet: process.env.NODE_ENV === 'production',
         shiki: {
           langAlias: {
             Go: 'go',
