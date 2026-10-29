@@ -39,13 +39,11 @@ if git diff --quiet pub main; then
   fi
   echo "ℹ️  发布 commit 已存在（上次推送未完成），补推。"
 else
-  BATCH=$(git log --oneline pub..main)
-  echo "== 待发布批次（私有迭代，$(echo "$BATCH" | wc -l) 个提交）=="
-  echo "$BATCH"
+  echo "== 本次发布内容差异（相对上次公开树）=="
+  git diff --stat pub main
 
-  NEW=$(git commit-tree main^{tree} -p pub -m "$TITLE" -m "本次发布汇总以下私有迭代：
-
-$BATCH")
+  # 公开 commit 只写发布标题，不写私有 commit hash/列表，避免泄露内部迭代编号
+  NEW=$(git commit-tree main^{tree} -p pub -m "$TITLE")
   git update-ref refs/heads/pub "$NEW"
 
   # 自检：发布 commit 的树必须与 main 完全一致

@@ -7,13 +7,19 @@
   "scripts": {
     "dev": "astro dev --port 4321 --host 0.0.0.0",
     "build": "flock -w 600 /tmp/alchemy-build.lock astro build",
-    "preview": "astro preview --port 4321 --host 0.0.0.0"
+    "preview": "astro preview --port 4321 --host 0.0.0.0",
+    "build:mermaid": "node scripts/build-mermaid.mjs",
+    "test": "node --test test/*.test.mjs"
   },
   "dependencies": {
     "@astrojs/starlight": "^0.42.5",
     "@orama/orama": "^3.1.18",
     "astro": "^7.3.6",
     "github-slugger": "^2.0.0",
+    "mermaid": "^12.2.0",
     "sharp": "^0.34.5"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

@@ -31,3 +31,6 @@ public/preview/
 
 # 本地截图辅助页（iframe 定位工具，含内部路径）
 public/_shot.html
+
+# mermaid 渲染器产物（esbuild 由 scripts/build-mermaid.mjs 生成，约 5MB，gzip 后约 1.4MB）
+public/mermaid-render.js
