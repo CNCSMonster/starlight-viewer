@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   computeFitScale,
+  computeFitHint,
   wheelZoomFactor,
   zoomView,
   MAX_SCALE,
@@ -56,4 +57,36 @@ test('zoomView 在上下限处仍保持锚点', () => {
   const min = zoomView({ k: 0.06, x: 5, y: 5 }, 100, 50, 0.01);
   close(min.k, MIN_SCALE);
   close((100 - min.x) / min.k, (100 - 5) / 0.06);
+});
+
+test('computeFitHint：小图估计字号 >= 11px 时保持常规操作提示', () => {
+  // 1x 缩放，基准 14px -> 14px
+  const hint = computeFitHint(1.0, { baseFontSize: 14 });
+  assert.equal(hint, '双指张开/并拢缩放 · 拖拽平移 · 双击复位');
+
+  // 全屏下
+  const fsHint = computeFitHint(1.0, { baseFontSize: 14, isFullscreen: true });
+  assert.equal(fsHint, '双指张开/并拢或滚轮缩放 · 拖拽平移 · 双击复位 · Esc 退出全屏');
+});
+
+test('computeFitHint：大图适配估计字号 < 11px 时提示已适配全图并展示缩放百分比', () => {
+  // 0.4x 缩放，基准 14px -> 5.6px < 11px
+  const hint = computeFitHint(0.4, { baseFontSize: 14 });
+  assert.equal(hint, '已适配全图（40%），双指张开或点击＋放大 · 拖拽平移 · 双击复位');
+
+  // 全屏下大图提示
+  const fsHint = computeFitHint(0.4, { baseFontSize: 14, isFullscreen: true });
+  assert.equal(fsHint, '已适配全图（40%），双指张开或滚轮缩放 · 拖拽平移 · 双击复位 · Esc 退出全屏');
+});
+
+test('computeFitHint：11px 边界判定', () => {
+  // 恰好 11px (11 / 14 = 0.7857)
+  assert.equal(
+    computeFitHint(11 / 14, { baseFontSize: 14 }),
+    '双指张开/并拢缩放 · 拖拽平移 · 双击复位',
+  );
+  // 略小于 11px (10.9 / 14)
+  assert.ok(
+    computeFitHint(10.9 / 14, { baseFontSize: 14 }).startsWith('已适配全图'),
+  );
 });

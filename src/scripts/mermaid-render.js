@@ -8,8 +8,12 @@
 import mermaid from 'mermaid';
 import { browserZoomBusy, watchBrowserZoom } from './browser-zoom.js';
 import { postProcessMermaidSvg } from './mermaid-contrast.js';
+import { enhanceSvgAccessibility } from './mermaid-a11y.js';
+import { createFullscreenManager } from './mermaid-fullscreen.js';
 import {
   computeFitScale,
+  computeFitHint,
+  DEFAULT_BASE_FONT_SIZE,
   wheelZoomFactor,
   zoomView,
   MIN_SCALE,
@@ -61,6 +65,16 @@ function naturalSize(svg) {
   return { w: rect.width || 800, h: rect.height || 600 };
 }
 
+function getBaseFontSize(svg) {
+  if (!svg || typeof getComputedStyle !== 'function') return DEFAULT_BASE_FONT_SIZE;
+  const sample = svg.querySelector('.nodeLabel, text, tspan');
+  if (sample) {
+    const size = parseFloat(getComputedStyle(sample).fontSize);
+    if (Number.isFinite(size) && size > 0) return size;
+  }
+  return DEFAULT_BASE_FONT_SIZE;
+}
+
 function createViewer(svgText, src) {
   const el = document.createElement('div');
   el.className = 'kb-mermaid';
@@ -99,10 +113,6 @@ function createViewer(svgText, src) {
   const gestureSupported =
     'ongesturestart' in window || typeof GestureEvent === 'function';
   const view = { k: 1, x: 0, y: 0 };
-  if (!(el.requestFullscreen || el.webkitRequestFullscreen)) {
-    fullscreenBtn.hidden = true;
-    fullscreenBtn.disabled = true;
-  }
   let natural = { w: 800, h: 600 };
   let touched = false;
   // 当前 view 所对应的容器尺寸；全屏/窗口变化后据此换算出新的相对倍率与视野中心
@@ -116,6 +126,7 @@ function createViewer(svgText, src) {
     svg.style.maxWidth = 'none';
     svg.style.width = natural.w + 'px';
     svg.style.height = natural.h + 'px';
+    enhanceSvgAccessibility(svg, { src });
   }
 
   let applyRaf = 0;
@@ -142,6 +153,22 @@ function createViewer(svgText, src) {
 
   const fitScale = (sw, sh) => computeFitScale(sw, sh, natural.w, natural.h);
 
+  const updateHint = () => {
+    if (!hint) return;
+    if (touched) {
+      hint.textContent = isFullscreen()
+        ? '双指张开/并拢或滚轮缩放 · 拖拽平移 · 双击复位 · Esc 退出全屏'
+        : '双指张开/并拢缩放 · 拖拽平移 · 双击复位';
+    } else {
+      const svg = canvas.querySelector('svg');
+      const baseSize = getBaseFontSize(svg);
+      hint.textContent = computeFitHint(view.k, {
+        baseFontSize: baseSize,
+        isFullscreen: isFullscreen(),
+      });
+    }
+  };
+
   /** 复位：整图装进窗口并居中 */
   function fit() {
     const sw = stage.clientWidth;
@@ -153,6 +180,7 @@ function createViewer(svgText, src) {
     view.y = natural.h * view.k <= sh ? (sh - natural.h * view.k) / 2 : 0;
     touched = false;
     stageBase = { w: sw, h: sh };
+    updateHint();
     paintNow();
   }
 
@@ -186,12 +214,21 @@ function createViewer(svgText, src) {
   function zoomAt(cx, cy, factor) {
     Object.assign(view, zoomView(view, cx, cy, factor));
     touched = true;
+    updateHint();
     apply();
   }
 
-  const fullscreenElement = () =>
-    document.fullscreenElement || document.webkitFullscreenElement || null;
-  const isFullscreen = () => fullscreenElement() === el;
+  // 等浏览器完成全屏布局（含 hint 栏高度变化）后再测容器尺寸
+  const refitSoon = () => requestAnimationFrame(() => requestAnimationFrame(refitPreservingView));
+
+  const fsManager = createFullscreenManager({
+    el,
+    doc: typeof document !== 'undefined' ? document : null,
+    fullscreenBtn,
+    onRefit: refitSoon,
+    updateHint: () => updateHint(),
+  });
+  const isFullscreen = () => fsManager.isFullscreen();
 
   /*
    * Safari 的触摸板双指张开/并拢只发 GestureEvent（gesturestart/change/end），
@@ -291,38 +328,10 @@ function createViewer(svgText, src) {
     { capture: true, passive: false, signal },
   );
 
-  /* 全屏：原生 requestFullscreen，Esc 退出；进入/退出后按新容器尺寸重算 fit 基准 */
-  async function toggleFullscreen() {
-    try {
-      const exit = document.exitFullscreen || document.webkitExitFullscreen;
-      const request = el.requestFullscreen || el.webkitRequestFullscreen;
-      if (isFullscreen()) await exit.call(document);
-      else if (request) await request.call(el);
-    } catch (err) {
-      console.warn('[mermaid] 全屏切换失败：', err);
-    }
-  }
-  fullscreenBtn.addEventListener('click', toggleFullscreen, { signal });
-
-  // 等浏览器完成全屏布局（含 hint 栏高度变化）后再测容器尺寸
-  const refitSoon = () => requestAnimationFrame(() => requestAnimationFrame(refitPreservingView));
-
-  let wasFullscreen = false;
-  const syncFullscreen = () => {
-    const on = isFullscreen();
-    // 其他图（或阅读器）进出全屏与本图无关，不能顺手把本图的缩放复位
-    if (!on && !wasFullscreen) return;
-    wasFullscreen = on;
-    el.toggleAttribute('data-kb-fullscreen', on);
-    fullscreenBtn.setAttribute('title', on ? '退出全屏（Esc）' : '全屏查看');
-    fullscreenBtn.setAttribute('aria-label', on ? '退出全屏（Esc）' : '全屏查看');
-    hint.textContent = on
-      ? '双指张开/并拢或滚轮缩放 · 拖拽平移 · 双击复位 · Esc 退出全屏'
-      : '双指张开/并拢缩放 · 拖拽平移 · 双击复位';
-    refitSoon();
-  };
-  document.addEventListener('fullscreenchange', syncFullscreen, { signal });
-  document.addEventListener('webkitfullscreenchange', syncFullscreen, { signal });
+  fullscreenBtn.addEventListener('click', () => fsManager.toggleFullscreen(), { signal });
+  window.addEventListener('keydown', (e) => fsManager.handleKeydown(e), { signal });
+  document.addEventListener('fullscreenchange', () => fsManager.syncNativeFullscreen(), { signal });
+  document.addEventListener('webkitfullscreenchange', () => fsManager.syncNativeFullscreen(), { signal });
 
   window.addEventListener(
     'resize',
@@ -523,14 +532,8 @@ function createViewer(svgText, src) {
       cancelAnimationFrame(applyRaf);
       applyRaf = 0;
     }
-    // 先退出全屏再 abort，避免 exitFullscreen 的异步事件落在已释放的监听器上
-    if (isFullscreen()) {
-      const exit = document.exitFullscreen || document.webkitExitFullscreen;
-      if (exit) {
-        const result = exit.call(document);
-        if (result && typeof result.catch === 'function') result.catch(() => {});
-      }
-    }
+    // 先清理全屏状态（恢复滚动、退出原生/伪全屏）再 abort
+    fsManager.destroy();
     ac.abort();
     if (resizeObserver) resizeObserver.disconnect();
   };

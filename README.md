@@ -27,7 +27,9 @@ Powered by **Astro Starlight**, **Expressive Code**, and **Orama in-memory searc
    - **Drag** pans; **double-click** or **⤢** refits the whole diagram; **⛶** opens native fullscreen (fits the new viewport, Esc exits, and the backdrop follows the theme — white for dark SVG in light theme, dark for light SVG in dark theme). SVG stays vector, so zoomed text remains sharp.
    - **Keyboard**: focus the diagram, then use arrow keys to pan, `+`/`-` to zoom, `0` to fit.
    - **Browser page zoom** (Ctrl/⌘ + `+`/`-`/`0`) is left to the browser: it magnifies the page and the diagram instead of being mistaken for a container resize that re-fits the diagram smaller.
-   - **Custom node colors in dark theme**: very bright `style fill:#...` values are blended toward Mermaid's dark node base to avoid glare, and node labels are checked against the actual background (WCAG 4.5:1) with a dark/light fallback. Light theme keeps the author's original fills. Thresholds live in `src/scripts/mermaid-contrast.js`.
+   - **Custom node colors in dark theme**: very bright `style fill:#...` values are blended toward Mermaid's dark node base to avoid glare, and node labels are checked against the actual background (WCAG >= 5.0:1 margin) with a dark/light fallback. Light theme keeps the author's original fills. Thresholds live in `src/scripts/mermaid-contrast.js`.
+   - **Coverage & Boundaries**: Covers standard `flowchart` and `sequence` diagrams (`g.node`, `g.cluster`, `g.actor`, `g.actor-man`), as well as class and state diagram nodes. Gradient, pattern, or image fills (`url(#...)`) and non-node graphics (such as edge labels, Gantt tasks, or Pie slices) are deliberately left unadjusted without guessing to avoid breaking default styling.
+   - **Accessibility (a11y)**: Automatically injects `<title>` ("Mermaid 图表") and `<desc>` (diagram type + node count) bound via `aria-labelledby` and `aria-describedby`, while preserving the `graphics-document` role so internal diagram text remains traversable.
 
 ---
 
