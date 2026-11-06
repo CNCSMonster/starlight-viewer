@@ -280,6 +280,7 @@ function getDynamicSidebar() {
     OpenSource: '🌐 开源项目 (OpenSource)',
     Articles: '📚 文章精选 (Articles)',
     Other: '🗂️ 综合杂项 (Other)',
+    看板: '📋 技术看板',
   };
 
   // 空目录（如历史遗留的百分号编码目录骨架）不进侧边栏

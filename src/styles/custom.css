@@ -178,7 +178,10 @@ html[data-theme="dark"] .kb-mermaid {
   --kb-mermaid-fs-hover: var(--sl-color-gray-6);
 }
 .kb-mermaid__stage {
-  position: relative; height: 70vh; min-height: 320px;
+  /* 高度按图形自然高度收紧：渲染器渲染完成后把「图高 + 留白」写进 --kb-mermaid-fit-h，
+     短图不再被固定 70vh 撑出大片空白；高图仍由视口高度封顶，超出部分靠缩放/平移查看。 */
+  position: relative;
+  height: clamp(240px, var(--kb-mermaid-fit-h, 70vh), 70vh);
   overflow: hidden; cursor: grab; touch-action: none;
   contain: layout paint;
 }
@@ -248,7 +251,9 @@ html[data-theme="dark"] .kb-mermaid:fullscreen::backdrop { background: #0b0d12; 
 /* 渲染失败：保留原始代码块并加醒目边框，便于排查 */
 .kb-mermaid-error { outline: 2px dashed var(--sl-color-orange, #e07b39); outline-offset: 2px; }
 
-@media (max-width: 50rem) { .kb-mermaid__stage { height: 56vh; } }
+@media (max-width: 50rem) {
+  .kb-mermaid__stage { height: clamp(240px, var(--kb-mermaid-fit-h, 56vh), 56vh); }
+}
 
 @media print {
   .kb-mermaid { border: 0; }

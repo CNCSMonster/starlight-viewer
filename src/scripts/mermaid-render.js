@@ -27,6 +27,11 @@ const BLOCK_SELECTOR =
 
 const ZOOM_STEP = 1.15;
 
+// 图表视口在图形自然高度之外预留的上下留白（px）。
+// 与 CSS 里 clamp(240px, var(--kb-mermaid-fit-h), 70vh/56vh) 配合：
+// 短图贴近内容高度，高图仍由视口高度封顶。
+const STAGE_VPAD = 32;
+
 const mounted = new Set();
 let seq = 0;
 let themeWatched = false;
@@ -126,6 +131,9 @@ function createViewer(svgText, src) {
     svg.style.maxWidth = 'none';
     svg.style.width = natural.w + 'px';
     svg.style.height = natural.h + 'px';
+    // 交给 CSS clamp 决定视口高度：短图不撑满，高图仍封顶。
+    // 写成自定义属性而非内联 height，全屏（flex:1 / height:auto）与打印（height:auto）规则才能继续生效。
+    stage.style.setProperty('--kb-mermaid-fit-h', Math.ceil(natural.h + STAGE_VPAD) + 'px');
     enhanceSvgAccessibility(svg, { src });
   }
 
