@@ -1,13 +1,16 @@
 ---
-// 通用 HTML 路由：自动发现 alchemy/content/ 下的 HTML 文件
+// 通用 HTML 路由：自动发现内容目录下的 HTML 文件
 // 路由格式：/html/<相对路径>（不含 .html 扩展名）
 import fs from 'node:fs';
 import path from 'node:path';
 
+// 内容目录：优先用 KB_CONTENT_DIR 覆盖，默认解析为与 viewer 仓库同级的笔记目录。
+// 不写死绝对路径，避免把本机目录结构随发布带出去。
+// 注意：getStaticPaths 会被提升到模块作用域，读不到组件作用域变量，故两处各自解析。
 export async function getStaticPaths() {
-  // 固定路径：starlight-viewer 位于 /home/ccm/my-docs/starlight-viewer
-  // alchemy/content 位于 /home/ccm/my-docs/alchemy/content
-  const CONTENT_DIR = '/home/ccm/my-docs/alchemy/content';
+  const CONTENT_DIR = process.env.KB_CONTENT_DIR
+    ? path.resolve(process.env.KB_CONTENT_DIR)
+    : path.resolve(process.cwd(), '../alchemy/content');
   const files = [];
   
   function scanDir(dir, prefix = '') {
@@ -33,8 +36,9 @@ export async function getStaticPaths() {
   return files;
 }
 
-// 组件渲染时重新定义 CONTENT_DIR
-const CONTENT_DIR = '/home/ccm/my-docs/alchemy/content';
+const CONTENT_DIR = process.env.KB_CONTENT_DIR
+  ? path.resolve(process.env.KB_CONTENT_DIR)
+  : path.resolve(process.cwd(), '../alchemy/content');
 const { path: slug } = Astro.params;
 const htmlPath = path.join(CONTENT_DIR, `${slug}.html`);
 
