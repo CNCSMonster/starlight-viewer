@@ -44,13 +44,14 @@ function compressionPlugin() {
         const rawWrite = res.write;
         const rawEnd = res.end;
         let chunks = [];
-        let statusCode = 200;
-        let statusMessage;
 
+        // 状态码必须同步回 res 本体：Vite 的模块脚本用 res.statusCode = 304 直接赋值，
+        // 只存在闭包里会被后面的 writeHead(200) 覆盖，把 304 变成「200 空包无 Content-Type」，
+        // 浏览器会以 MIME 为空为由拒绝执行 module script。
         res.writeHead = function (code, reason, headers) {
-          statusCode = code;
+          res.statusCode = code;
           if (typeof reason === 'string') {
-            statusMessage = reason;
+            res.statusMessage = reason;
           } else if (headers === undefined && typeof reason === 'object') {
             headers = reason;
           }
@@ -76,26 +77,24 @@ function compressionPlugin() {
           const buffer = Buffer.concat(chunks);
           const contentType = String(res.getHeader('content-type') || '');
           const isCompressible = /text|javascript|json|xml|svg|html/i.test(contentType);
+          const status = res.statusCode;
+          // 304/204 等无正文响应、HEAD 请求一律原样透传，绝不改写成带正文的 200
+          const hasBody = buffer.length > 0 && req.method !== 'HEAD';
 
           // 还原原生函数
           res.writeHead = rawWriteHead;
           res.write = rawWrite;
           res.end = rawEnd;
 
-          if (buffer.length < 1024 || !isCompressible || res.getHeader('content-encoding')) {
-            if (statusCode) rawWriteHead.call(res, statusCode, statusMessage);
+          if (status !== 200 || !hasBody || buffer.length < 1024 || !isCompressible || res.getHeader('content-encoding')) {
             return rawEnd.call(res, buffer, callback);
           }
 
           zlib.gzip(buffer, { level: 6 }, (err, compressed) => {
-            if (err) {
-              if (statusCode) rawWriteHead.call(res, statusCode, statusMessage);
-              return rawEnd.call(res, buffer, callback);
-            }
+            if (err) return rawEnd.call(res, buffer, callback);
             res.setHeader('Content-Encoding', 'gzip');
             res.removeHeader('Content-Length');
             res.setHeader('Content-Length', compressed.length);
-            if (statusCode) rawWriteHead.call(res, statusCode, statusMessage);
             rawEnd.call(res, compressed, callback);
           });
         };
