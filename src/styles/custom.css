@@ -196,7 +196,13 @@ html[data-theme="dark"] .kb-mermaid {
 /* 解除 Starlight 正文对 svg 的 max-width 限制，按 viewBox 自然尺寸渲染 */
 .kb-mermaid__canvas svg { display: block; max-width: none !important; height: auto; }
 
-.kb-mermaid__tools { position: absolute; top: 8px; right: 8px; z-index: 2; display: flex; align-items: center; gap: 4px; }
+/* 工具条独立成一行置于图上方，而非绝对定位浮在图上：
+   序列图/泳道图的参与者方框位于右上角，浮层会直接盖住标签。 */
+.kb-mermaid__tools {
+  position: static; display: flex; align-items: center; justify-content: flex-end;
+  gap: 4px; padding: 6px 8px;
+  border-bottom: 1px solid var(--sl-color-gray-6);
+}
 /* 控件尺寸与字形无关：固定 flex-basis + box-sizing，避免系统字体把 ＋/－ 撑成不同大小造成错位 */
 .kb-mermaid__tools button {
   display: inline-flex; align-items: center; justify-content: center;
@@ -213,6 +219,27 @@ html[data-theme="dark"] .kb-mermaid {
 .kb-mermaid__hint {
   padding: 4px 10px; border-top: 1px solid var(--sl-color-gray-6);
   font-size: 12px; color: var(--sl-color-gray-3);
+}
+
+/* 复制结果提示：跟随工具条落在同一行（工具条右侧约 172px 宽），不进入图区 */
+.kb-mermaid__toast {
+  position: absolute; top: 6px; right: 176px; z-index: 3;
+  padding: 5px 12px; border-radius: 6px;
+  border: 1px solid var(--sl-color-gray-5);
+  background: var(--sl-color-bg); color: var(--sl-color-text);
+  font-size: 12px; line-height: 1.4; white-space: nowrap;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, .12);
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: opacity .16s ease, transform .16s ease;
+  transform: translateY(-4px);
+}
+.kb-mermaid__toast.is-visible { opacity: 1; visibility: visible; transform: translateY(0); }
+.kb-mermaid__toast[data-kind="ok"] { border-color: var(--sl-color-green, #2f9e44); }
+.kb-mermaid__toast[data-kind="warn"] { border-color: var(--sl-color-orange, #e07b39); }
+.kb-mermaid__toast[data-kind="error"] { border-color: var(--sl-color-red, #e03131); color: var(--sl-color-red, #c92a2a); }
+.kb-mermaid:fullscreen .kb-mermaid__toast,
+.kb-mermaid[data-kb-fullscreen] .kb-mermaid__toast {
+  background: var(--kb-mermaid-fs-bg); color: var(--kb-mermaid-fs-fg);
 }
 
 /* ── Mermaid 全屏：容器铺满视口，背景保证与 SVG 的对比度 ─────
@@ -259,5 +286,5 @@ html[data-theme="dark"] .kb-mermaid:fullscreen::backdrop { background: #0b0d12; 
   .kb-mermaid { border: 0; }
   .kb-mermaid__stage { height: auto; overflow: visible; }
   .kb-mermaid__canvas { position: static; transform: none !important; }
-  .kb-mermaid__tools, .kb-mermaid__hint { display: none; }
+  .kb-mermaid__tools, .kb-mermaid__hint, .kb-mermaid__toast { display: none; }
 }

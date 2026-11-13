@@ -20,6 +20,153 @@ import {
   MAX_SCALE,
 } from './mermaid-zoom.js';
 
+const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * 按 DOM 顺序收集 foreignObject 内的全部可见文本，把 <br> 与块级元素边界还原成换行。
+ * mermaid 的标签用 HTML 排版（<p>、<br>、CSS 自动折行），序列图数学消息等还可能没有 <p>；
+ * 统一遍历而非只取首个段落，避免丢段落或整块丢弃标签。
+ */
+function collectLabelText(host) {
+  const parts = [];
+  const walk = (node) => {
+    for (const child of node.childNodes) {
+      if (child.nodeType === 3) { parts.push(child.textContent); continue; }
+      if (child.nodeType !== 1) continue;
+      const tag = child.nodeName.toLowerCase();
+      if (tag === 'br') { parts.push('\n'); continue; }
+      const isBlock = tag === 'p' || tag === 'div' || tag === 'li' || tag === 'ul' || tag === 'ol';
+      if (isBlock) parts.push('\n');
+      walk(child);
+      if (isBlock) parts.push('\n');
+    }
+  };
+  walk(host);
+  return parts.join('').replace(/\n{2,}/g, '\n').trim();
+}
+
+/**
+ * 把当前 DOM 里的 mermaid SVG 导出为 PNG Blob，供「复制图片」写入剪贴板。
+ *
+ * Chrome 不允许把含 <foreignObject> 的 SVG 当图片加载后再导出 canvas（canvas 被污染），
+ * 而 mermaid 的节点/边标签正是用 foreignObject 包 HTML（<p>、<br>、CSS 自动折行）实现的。
+ * 所以先在 clone 上把每个 foreignObject 换成原生 <text>/<tspan>：
+ *   - collectLabelText 取全部文本并还原换行，再用 measureText 依据 max-width 复现 CSS 自动折行；
+ *   - 文字颜色取 contrast 后处理写过 inline 色的元素（高对比色），并以 inline !important 写回，
+ *     否则会被 SVG 内嵌样式 .label text{fill:...} 覆盖、深色主题下重新不可读；
+ *   - 沿用 foreignObject 的 width/height 居中排布，继承父 <g transform> 的局部坐标。
+ * 铺底色取 .kb-mermaid 的全屏配色变量 --kb-mermaid-fs-bg，2× 分辨率保证清晰；
+ * 图形、文字与底色都在本次调用开始时取快照，避免与后续主题切换混合。
+ */
+async function svgToPngBlob(root) {
+  const svg = root.querySelector('.kb-mermaid__canvas svg');
+  if (!svg) throw new Error('找不到 mermaid SVG');
+  const vb = svg.viewBox && svg.viewBox.baseVal;
+  const W = Math.ceil((vb && vb.width) || 800);
+  const H = Math.ceil((vb && vb.height) || 600);
+  // 底色与图形同一次快照：不在 await 之后再读变量，避免主题切换产出混合图
+  const bg = getComputedStyle(root).getPropertyValue('--kb-mermaid-fs-bg').trim() || '#ffffff';
+
+  const meas = document.createElement('canvas').getContext('2d');
+  const clone = svg.cloneNode(true);
+  const live = Array.from(svg.querySelectorAll('foreignObject'));
+
+  Array.from(clone.querySelectorAll('foreignObject')).forEach((fo, i) => {
+    const src = live[i];
+    const div = src && (src.querySelector('div') || src);
+    // 不再因缺少 <p>/.nodeLabel 就整块删除：收集全部文本，确实没有文字才移除
+    const text = src ? collectLabelText(src) : '';
+    if (!div || !text) { fo.remove(); return; }
+
+    const cs = getComputedStyle(div);
+    const fs = parseFloat(cs.fontSize) || 16;
+    const maxW = parseFloat(cs.maxWidth) || parseFloat(fo.getAttribute('width')) || 200;
+    const w = parseFloat(fo.getAttribute('width')) || 0;
+    const h = parseFloat(fo.getAttribute('height')) || 0;
+    const lineH = fs * 1.5;
+    const rawLines = text.split('\n');
+
+    // 用 measureText 复现 CSS 的按宽度自动折行
+    meas.font = fs + 'px ' + cs.fontFamily;
+    const lines = [];
+    rawLines.forEach((seg) => {
+      let cur = '';
+      for (const ch of seg) {
+        if (cur && meas.measureText(cur + ch).width > maxW) { lines.push(cur); cur = ch; }
+        else cur += ch;
+      }
+      lines.push(cur);
+    });
+
+    // 取色：优先 contrast 后处理写过 inline 色的元素，回退到承载文字的元素。
+    // inline !important 才能压过 SVG 内嵌 .label text 的 fill（presentation attribute 会被覆盖）。
+    const colorEl = src.querySelector('[style*="color"]') ||
+      src.querySelector('.nodeLabel, .edgeLabel, span, p') || div;
+    const color = getComputedStyle(colorEl).color || cs.color;
+
+    const t = document.createElementNS(SVG_NS, 'text');
+    t.setAttribute('x', (w / 2).toFixed(2));
+    t.setAttribute('y', (h / 2).toFixed(2));
+    t.style.setProperty('text-anchor', 'middle', 'important');
+    t.style.setProperty('font-size', fs + 'px', 'important');
+    t.style.setProperty('font-family', cs.fontFamily, 'important');
+    t.style.setProperty('fill', color, 'important');
+    const n = lines.length;
+    lines.forEach((line, k) => {
+      const ts = document.createElementNS(SVG_NS, 'tspan');
+      ts.setAttribute('x', (w / 2).toFixed(2));
+      ts.setAttribute('dy', k === 0 ? (-(n - 1) * lineH / 2 + fs * 0.35).toFixed(2) : lineH.toFixed(2));
+      ts.textContent = line;
+      t.appendChild(ts);
+    });
+    fo.replaceWith(t);
+  });
+
+  clone.setAttribute('xmlns', SVG_NS);
+  clone.setAttribute('width', W);
+  clone.setAttribute('height', H);
+  clone.removeAttribute('style');
+
+  const svgText = new XMLSerializer().serializeToString(clone);
+  const url = URL.createObjectURL(new Blob([svgText], { type: 'image/svg+xml;charset=utf-8' }));
+  try {
+    const img = new Image();
+    const ok = await new Promise((res) => {
+      img.onload = () => res(true);
+      img.onerror = () => res(false);
+      img.src = url;
+    });
+    if (!ok) throw new Error('SVG 转图片失败');
+
+    const scale = 2; // 高清导出，粘贴到聊天工具也不糊
+    const canvas = document.createElement('canvas');
+    canvas.width = W * scale;
+    canvas.height = H * scale;
+    const ctx = canvas.getContext('2d');
+    ctx.scale(scale, scale);
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+    ctx.drawImage(img, 0, 0, W, H);
+    const blob = await new Promise((res) => canvas.toBlob(res, 'image/png'));
+    if (!blob) throw new Error('canvas 导出失败');
+    return blob;
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+/** 复制失败时的兜底：把 PNG 作为文件下载，读者仍可拿去分享 */
+function downloadPng(blob) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mermaid-diagram.png';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
 // Starlight + Expressive Code 把围栏渲染成 <pre data-language="mermaid">；
 // 未启用 Expressive Code 时退化为 <pre><code class="language-mermaid">
 const BLOCK_SELECTOR =
@@ -103,7 +250,11 @@ function createViewer(svgText, src) {
     '<button type="button" data-act="fullscreen" title="全屏查看" aria-label="全屏查看">' +
     icon('<rect x="8" y="8" width="8" height="8" rx="1"/><path d="M3 8V3h5M21 8V3h-5M3 16v5h5M21 16v5h-5"/>') +
     '</button>' +
+    '<button type="button" data-act="copy" title="复制图片（PNG）" aria-label="复制图片（PNG）">' +
+    icon('<rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/>') +
+    '</button>' +
     '</div>' +
+    '<span class="kb-mermaid__toast" role="status" aria-live="polite"></span>' +
     '<div class="kb-mermaid__stage" tabindex="0" role="region" aria-label="Mermaid 图表：方向键平移，+/- 缩放，0 复位"><div class="kb-mermaid__canvas">' +
     svgText +
     '</div></div>' +
@@ -511,6 +662,64 @@ function createViewer(svgText, src) {
   }, { signal });
   el.querySelector('[data-act="fit"]').addEventListener('click', fit, { signal });
 
+  // 「复制图片」：必须在用户手势的同步调用栈里发起 clipboard.write，
+  // 否则 await 之后浏览器的 transient activation 已失效，写入会被拒。
+  const copyBtn = el.querySelector('[data-act="copy"]');
+  const toast = el.querySelector('.kb-mermaid__toast');
+  let feedbackTimer = 0;
+  const feedback = (text, kind = 'ok') => {
+    copyBtn.title = text;
+    copyBtn.setAttribute('aria-label', text);
+    if (toast) {
+      toast.textContent = text;
+      toast.dataset.kind = kind;
+      toast.classList.add('is-visible');
+    }
+    clearTimeout(feedbackTimer);
+    feedbackTimer = setTimeout(() => {
+      copyBtn.title = '复制图片（PNG）';
+      copyBtn.setAttribute('aria-label', '复制图片（PNG）');
+      if (toast) {
+        toast.classList.remove('is-visible');
+        toast.textContent = '';
+        toast.removeAttribute('data-kind');
+      }
+    }, 2000);
+  };
+  copyBtn.addEventListener('click', () => {
+    const blobPromise = svgToPngBlob(el);
+    // 统一兜底：剪贴板不可用/被拒、或连 PNG 都没生成成功，都如实反馈
+    const fallback = () =>
+      blobPromise.then(
+        (blob) => { downloadPng(blob); feedback('已下载 PNG（剪贴板不可用）', 'warn'); },
+        () => feedback('复制失败', 'error'),
+      );
+
+    let handled = false;
+    try {
+      const clip = navigator.clipboard;
+      const hasApi =
+        clip && typeof clip.write === 'function' && typeof window.ClipboardItem === 'function';
+      const canWrite =
+        hasApi &&
+        (typeof window.ClipboardItem.supports !== 'function' ||
+          window.ClipboardItem.supports('image/png'));
+      if (canWrite) {
+        // 同步发起，保留 transient activation；blob 以 Promise 交给 ClipboardItem。
+        // 构造器 / supports / write 任一步同步抛错都会被外层 catch 接住，统一降级。
+        const writePromise = clip.write([new ClipboardItem({ 'image/png': blobPromise })]);
+        Promise.resolve(writePromise).then(
+          () => feedback('已复制图片', 'ok'),
+          fallback,
+        );
+        handled = true;
+      }
+    } catch {
+      // 例如 WebKit 的 ClipboardItem 不接受 Promise<Blob>：不让异常逃逸，走降级
+    }
+    if (!handled) fallback();
+  }, { signal });
+
   // 容器尺寸变化（全屏、切换左右栏、窗口缩放）：未操作过则复位，已操作过则保留视野换算
   let resizeObserver = null;
   if (typeof ResizeObserver === 'function') {
@@ -540,6 +749,7 @@ function createViewer(svgText, src) {
       cancelAnimationFrame(applyRaf);
       applyRaf = 0;
     }
+    clearTimeout(feedbackTimer);
     // 先清理全屏状态（恢复滚动、退出原生/伪全屏）再 abort
     fsManager.destroy();
     ac.abort();
